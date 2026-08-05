@@ -27,3 +27,6 @@ coverage/
 # Build output
 dist/
 build/
+
+# Temporary browser demo (replace with React app later)
+public/

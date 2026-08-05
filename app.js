@@ -8,16 +8,13 @@ require('dotenv/config');
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public'));
 
 const TaskRoutes = require('./routes/task')
 const AuthRoutes = require('./routes/auth')
 
 app.use('/tasks', TaskRoutes)
 app.use('/auth', AuthRoutes)
-
-app.get('/', (req, res) => {
-    res.send('This is the root URL')
-});
 
 // handle 404
 app.use((req, res) => {
