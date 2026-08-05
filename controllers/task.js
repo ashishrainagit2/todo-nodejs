@@ -2,7 +2,7 @@ const Task = require('../models/task');
 
 exports.getTasks = async (req, res, next) => {
     try {
-        const filter = {};
+        const filter = { userId: req.user._id };
 
         if (req.query.status) filter.status = req.query.status;
         if (req.query.priority) filter.priority = req.query.priority;
@@ -37,7 +37,7 @@ exports.getTasks = async (req, res, next) => {
 
 exports.getTaskById = async (req, res, next) => {
     try {
-        const task = await Task.findById(req.params.id);
+        const task = await Task.findOne({ _id: req.params.id, userId: req.user._id });
         if (!task) {
             return res.status(404).json({ message: 'Task not found' });
         }
@@ -73,7 +73,13 @@ exports.createTask = async (req, res, next) => {
 
 exports.updateTask = async (req, res, next) => {
     try {
-        const task = await Task.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        const { userId, ...updates } = req.body;
+
+        const task = await Task.findOneAndUpdate(
+            { _id: req.params.id, userId: req.user._id },
+            updates,
+            { new: true }
+        );
         if (!task) {
             return res.status(404).json({ message: 'Task not found' });
         }
@@ -91,7 +97,7 @@ exports.deleteManyTasks = async (req, res, next) => {
             return res.status(400).json({ message: 'Send an array of ids in the body' });
         }
 
-        const result = await Task.deleteMany({ _id: { $in: ids } });
+        const result = await Task.deleteMany({ _id: { $in: ids }, userId: req.user._id });
         res.json({
             message: `${result.deletedCount} task(s) deleted`,
             deletedCount: result.deletedCount
@@ -103,7 +109,7 @@ exports.deleteManyTasks = async (req, res, next) => {
 
 exports.deleteTask = async (req, res, next) => {
     try {
-        const task = await Task.findByIdAndDelete(req.params.id);
+        const task = await Task.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
         if (!task) {
             return res.status(404).json({ message: 'Task not found' });
         }
