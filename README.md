@@ -843,6 +843,7 @@ Work through these via [`todo.md`](todo.md) — backend breadth first, then host
 | `authflow.md` | JWT, sign, verify, token creation |
 | `mongoStructure.md` | Collections, documents, linking |
 | `learn.md` | dotenv, cors, json, errors, routes, **headers**, **rate limiting** Q&A |
+| `opensource.md` | **Commercial OSS Node projects** — Cal.com, PostHog, Vendure, YC, Google, study guide |
 | `todo.md` | Full future work checklist |
 
 ---
