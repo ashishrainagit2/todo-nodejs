@@ -5,15 +5,20 @@ const User = require('../models/user');
 exports.register = async (req, res, next) => {
     try {
         const { email, password, role } = req.body;
+
+        const existingUser = await User.findOne({ email });
+        if (existingUser) {
+            const err = new Error('Email already registered');
+            err.status = 409;
+            return next(err);
+        }
+
         const user = await User.create({ email, password, role });
         res.status(201).json({
             message: 'User created successfully. Please login.',
             user: { id: user._id, email: user.email, role: user.role }
         });
     } catch (e) {
-        if (e.code === 11000) {
-            return res.status(400).json({ message: 'Email already registered' });
-        }
         next(e);
     }
 };
