@@ -43,6 +43,8 @@ exports.getTaskById = async (req, res, next) => {
         }
         res.json(task);
     } catch (e) {
+        console.error('Error getting task by id: ', e);
+        console.log('Error status getting task by id: ', e.status);
         next(e);
     }
 };

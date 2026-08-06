@@ -47,15 +47,17 @@ Simple Node.js + Express + MongoDB todo backend.
 - ✅ `.gitignore` + `.env.example`
 - ✅ Unique email on user
 - ✅ Rate limiting — `express-rate-limit` on `/tasks` and `/auth` (see [Rate limiting](#rate-limiting))
+- ✅ Global error mapping — `CastError` → **400**, `ValidationError` → **400**, duplicate email → **409** (see [API error handling](#api-error-handling))
+- ✅ Unique email enforced — `User.syncIndexes()` on startup + `findOne` check on register
 
 ---
 
 ## 💡 In progress
 
 - 💡 Auto-update `updatedAt` on PATCH
-- 💡 Stronger input validation (beyond Mongoose defaults)
+- 💡 Stronger input validation (`express-validator` — beyond Mongoose defaults)
 - 💡 Date filters (`?dueBefore=`, overdue tasks)
-- 💡 **Exact, consistent API errors** — see [API error handling](#api-error-handling) below
+- 💡 **`AppError` + consistent error JSON** — steps 1–3 done; shape + `AppError` class still pending
 
 ---
 
@@ -74,12 +76,12 @@ Simple Node.js + Express + MongoDB todo backend.
 - ❌ `AppError` class — `throw new AppError('Task not found', 404)` + one handler
 - ❌ Consistent error JSON shape — `{ success, status, message, errors[] }`
 - ❌ Field-level validation errors — `{ field: "title", message: "required" }`
-- ❌ `409 Conflict` for duplicate email (today: `400`)
+- ✅ `409 Conflict` for duplicate email — `findOne` + `next(err)` **409**, MongoDB `11000` backup, unique index via `syncIndexes()`
 - ❌ `403 Forbidden` for role-based routes (admin vs user)
-- ❌ Invalid MongoDB id format → `400` not `500`
+- ✅ Invalid MongoDB id format → `400` — global handler, `CastError`
 - ❌ Malformed JSON body → clear `400` message
 - ❌ Production: hide internal `500` details from client (log server-side only)
-- ❌ Map all Mongoose `ValidationError` → readable `400` messages
+- ✅ Map Mongoose `ValidationError` → readable **400** messages (global handler)
 
 ---
 
@@ -184,6 +186,19 @@ See [`learn.md`](learn.md) section 10 for header types explained in depth.
 
 **Rule:** `4xx` = client/auth issue. `5xx` = server issue.
 
+### Implemented — global error handler (`app.js`)
+
+| Step | Mongoose / Mongo error | Status | Response message |
+|------|------------------------|--------|------------------|
+| ✅ 1 | `CastError` (invalid `:id`) | **400** | `Invalid id format` |
+| ✅ 2 | Duplicate email (`11000`) | **409** | `Email already registered` |
+| ✅ 2b | Duplicate email (`findOne`) | **409** | `Email already registered` via `next(err)` + `err.status` |
+| ✅ 3 | `ValidationError` (schema) | **400** | Joined field messages from `err.errors` |
+
+**Controller pattern:** expected cases return directly (`404` task not found); unexpected → `catch (e) { next(e); }` → global handler.
+
+**Register duplicate flow:** `findOne` → `next(err)` with `status: 409` **or** `User.create` hits unique index → `11000` → global handler. Requires `User.syncIndexes()` so `email` unique index exists in MongoDB.
+
 ### Where errors are handled today
 
 ```
@@ -199,15 +214,16 @@ Request
  404 handler                        → unknown route
    │
    ▼
- Global error handler               → ValidationError → 400, else → 500
+ Global error handler               → CastError → 400, ValidationError → 400,
+                                      11000 / err.status → 409, else → 500
 ```
 
 | Layer | Handles |
 |-------|---------|
 | **Middleware** | Rate limit (`429`), auth (`401`), CORS (browser block) |
-| **Controller** | Expected errors — bad body (`400`), not found (`404`) |
+| **Controller** | Expected errors — bad body (`400`), not found (`404`), duplicate email (`next` → **409**) |
 | **404 handler** | Route doesn't exist |
-| **Error handler** | Thrown errors via `next(err)` |
+| **Global error handler** | `CastError`, `ValidationError`, `11000`, custom `err.status` |
 
 ### Two controller patterns
 
@@ -239,6 +255,15 @@ if (!task) {
 | `422` | Validation (alternative to 400) |
 | `429` | Rate limit exceeded — too many requests from this IP |
 | `500` | Internal server error — hide details in production |
+
+### Postman quick tests (error handling)
+
+| Test | Request | Expected |
+|------|---------|----------|
+| Bad id | `GET /tasks/not-valid-id` + Bearer | **400** `Invalid id format` |
+| Duplicate register | `POST /auth/register` same email twice | **409** `Email already registered` |
+| Missing title | `POST /tasks` `{ "description": "x" }` + Bearer | **400** `Path \`title\` is required.` |
+| Not found | `GET /tasks/<valid-id-not-yours>` + Bearer | **404** `Task not found` |
 
 ### Target response shape *(future)*
 
@@ -318,14 +343,20 @@ Headers: `RateLimit-Policy`, `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimi
 
 ```
 todo_api/
-├── app.js              → server, middleware, 404, errors
+├── app.js              → server, middleware, 404, global error handler, syncIndexes
 ├── middleware/
 │   ├── auth.js         → JWT protect
 │   └── rateLimit.js    → apiLimiter + authLimiter
-├── routes/task.js      → URLs
-├── controllers/task.js → logic
-├── models/task.js      → schema
-└── .env                → DB_CONNECTION, PORT
+├── routes/
+│   ├── auth.js         → register, login
+│   └── task.js         → CRUD + bulk
+├── controllers/
+│   ├── auth.js         → register (findOne + create), login
+│   └── task.js         → task logic
+├── models/
+│   ├── user.js         → email unique, bcrypt pre-save
+│   └── task.js         → schema + enums
+└── .env                → DB_CONNECTION, PORT, JWT, rate limits
 ```
 
 ---
@@ -349,7 +380,8 @@ todo_api/
 | | Name |
 |---|------|
 | Database | `todo-app` |
-| Collection | `tasks` |
+| Collections | `users`, `tasks` |
+| Indexes | `users.email` unique (via `User.syncIndexes()` on startup) |
 
 ---
 
@@ -367,9 +399,10 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 |-------|----------|--------|
 | HTTP methods | GET read, POST create, PATCH update, DELETE remove | ✅ |
 | Clean URLs | `/tasks/:id` not `/getTask/:id` | ✅ |
-| Status codes | 200 OK, 201 created, 400 bad input, 404 not found, 500 server error | 💡 |
+| Status codes | 200, 201, 400, 401, 404, 409, 429, 500 — mapped in global handler | ✅ steps 1–3 |
 | **API versioning** | `/api/v1/tasks` so you can change v2 without breaking clients | ❌ |
 | Pagination | `?page=1&limit=10` — don't return everything at once | ❌ |
+| **REST vs WebSocket vs gRPC** | HTTP JSON vs live channel vs service-to-service RPC | ❌ concept — see [WebSocket & gRPC](#websocket--grpc-vs-rest) |
 
 ---
 
@@ -410,7 +443,8 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 | **`next(err)` in controllers** | Pass errors up instead of duplicate responses | ✅ |
 | **Structured logging** | Log requests + errors (`morgan`, `winston`) | ❌ |
 | **Health check** | `GET /health` — is server alive? | ❌ |
-| **Meaningful error messages** | Exact status + message per failure type — see [API error handling](#api-error-handling) | 💡 |
+| **Meaningful error messages** | Exact status + message per failure type | ✅ steps 1–3 — see [API error handling](#api-error-handling) |
+| **Handle API failure (client + server)** | Timeouts, retry, idempotency, circuit breaker | 💡 partial — see [Handling API failure](#handling-api-failure) |
 
 ---
 
@@ -423,6 +457,7 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 | **Indexes** | Speed up filter/search on large collections | ❌ |
 | **Query optimization** | Fetch only fields you need, avoid slow regex at scale | 💡 |
 | **Timestamps** | Auto `updatedAt` on every edit | 💡 |
+| **ACID transactions** | Multi-step writes all succeed or all roll back | ❌ concept — see [ACID transactions](#acid-transactions) |
 
 ---
 
@@ -447,8 +482,219 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 | **Load balancing** | Spread traffic across multiple servers (nginx, cloud LB) | ❌ infra |
 | **Horizontal scaling** | More servers, not bigger server | ❌ infra |
 | **Background jobs** | Heavy work off the request (email, exports) — queues later | ❌ |
+| **Concurrent connections** | Many clients at once on one Node process — event loop, pools | ❌ concept — see [Advanced concepts](#advanced-concepts-learn-breadth--force-in-when-ready) |
 
 > Load balancing & multiple servers are **infrastructure** — you learn the concept first; setup comes at deploy time.
+
+---
+
+## Advanced concepts (learn breadth — force in when ready)
+
+Topics you asked to track **even if the Todo API doesn't need them yet**. Learn the theory now; **force a small experiment into the app later** so the idea sticks.
+
+| Topic | Needed for Todo MVP? | Force-in idea (when ready) |
+|-------|----------------------|----------------------------|
+| [Concurrent connections](#concurrent-connections) | 💡 implicit | Load-test `GET /tasks`, watch Mongo pool |
+| [WebSocket & gRPC](#websocket--grpc-vs-rest) | ❌ | Live task updates via WebSocket demo |
+| [Handle API failure](#handling-api-failure) | 💡 partial | Client retry + idempotent bulk create |
+| [ACID transactions](#acid-transactions) | ❌ | Register user + seed welcome task atomically |
+
+---
+
+### Concurrent connections
+
+**What it is:** How many **clients can talk to your server at the same time** without each one blocking the others.
+
+**Classic model (e.g. old Apache, Java thread-per-request):**
+```
+Request 1 → Thread 1 (blocked until DB responds)
+Request 2 → Thread 2
+Request 3 → Thread 3
+… 500 threads = heavy memory
+```
+
+**Node.js model (what you use):**
+```
+One main thread + event loop
+Request 1 → start async DB call → don't wait, handle Request 2
+DB returns  → finish Request 1 response
+```
+
+Node is **single-threaded for JavaScript** but **non-blocking** — it handles **many concurrent connections** as long as work is async (MongoDB queries, `await`, etc.).
+
+| Term | Meaning |
+|------|---------|
+| **Concurrent** | Many requests *in flight* at the same time |
+| **Parallel** | Actually running on multiple CPU cores at once (Worker threads, cluster, multiple servers) |
+| **Connection pool** | MongoDB driver keeps a pool of open DB connections — reuse instead of connect per query |
+| **Backpressure** | When overload hits, slow or reject clients (rate limiting, 503, queue) — you started this with `429` |
+
+**When it bites you:**
+- Slow regex on huge `tasks` collection → one request holds the event loop too long → others lag
+- No pool limits → too many DB connections under load
+- CPU-heavy sync code (`JSON.parse` on 50MB body) → blocks everyone
+
+**Force into Todo API (learning):**
+1. Run 50 parallel `GET /tasks` in Postman Collection Runner or `ab` / `k6` — watch response times.
+2. Log `mongoose.connection.readyState` and pool size under load.
+3. Later: `cluster` module or PM2 multi-instance on deploy.
+
+**One line:** Concurrent connections = many users hitting your API at once; Node handles them with async I/O, not one thread per user.
+
+---
+
+### WebSocket & gRPC (vs REST)
+
+Your Todo API today is **REST over HTTP/JSON** — request → response, connection closes. Two other common styles:
+
+#### Comparison
+
+| | **REST (you have)** | **WebSocket** | **gRPC** |
+|---|---------------------|---------------|----------|
+| **Transport** | HTTP | HTTP upgrade → persistent TCP | HTTP/2 (often) |
+| **Style** | Request / response | **Bidirectional**, long-lived | Request / response (+ streams) |
+| **Format** | JSON (text) | JSON or binary frames | **Protocol Buffers** (binary) |
+| **Best for** | CRUD APIs, public HTTP | Chat, live dashboards, notifications | **Service-to-service**, microservices |
+| **Browser** | Native `fetch` | Native `WebSocket` API | Needs grpc-web proxy |
+| **Node package** | Express | `ws`, `socket.io` | `@grpc/grpc-js` |
+
+#### WebSocket — when & why
+
+```
+Client                    Server
+   │──── HTTP handshake ────►│
+   │◄─── upgrade to WS ──────│
+   │════ open connection ════│  stays open
+   │◄── task updated ────────│  server pushes anytime
+   │──── mark complete ─────►│  client sends anytime
+```
+
+**Todo API use case (force in):**
+- User A creates a task → **push** to same user's open tabs without polling `GET /tasks` every 5s
+- "Someone assigned you a task" notifications (future multi-user)
+
+**Not a replacement for REST** — keep REST for CRUD; add WebSocket for **real-time** events.
+
+#### gRPC — when & why
+
+- Strongly typed `.proto` contracts (like TypeScript interfaces for the wire)
+- Faster, smaller payloads than JSON
+- Used **backend ↔ backend** (Order service calls User service), not usually browser-first
+
+**Todo API use case (force in):**
+- Split into `auth-service` + `task-service` — they talk via gRPC internally while the browser still uses REST
+- Overkill for one monolith — good **learning exercise** in a separate branch
+
+**One line:** REST = your HTTP JSON API; WebSocket = live two-way channel; gRPC = fast typed calls between services.
+
+---
+
+### Handling API failure
+
+Failure happens at **three layers** — know all three:
+
+```
+Browser/App          Network              Your API              Database
+    │                    │                    │                     │
+    │── fetch /tasks ───►│── timeout? ───────►│── query fails ─────►│
+    │◄── 500 / no net ───│◄── 429 rate limit ──│◄── connection lost ─│
+```
+
+#### Server-side (your job now — ties to [status codes fix](#api-error-handling))
+
+| Practice | What | Status in Todo API |
+|----------|------|-------------------|
+| **Correct status codes** | 4xx vs 5xx — client vs server fault | ✅ steps 1–3 done |
+| **Consistent error JSON** | Same shape every failure | ❌ `AppError` goal |
+| **Don't leak internals** | Hide stack traces in production | ❌ |
+| **Global error handler** | One place for crashes | ✅ |
+| **Graceful shutdown** | Finish in-flight requests before kill | ❌ deploy topic |
+| **Health check** | `GET /health` for load balancer | ❌ |
+| **Idempotency** | Same request twice = safe (e.g. duplicate POST) | ❌ |
+
+#### Client-side (your Next.js app later)
+
+| Practice | What |
+|----------|------|
+| **Timeouts** | Don't wait forever — `AbortController` after 10s |
+| **Retry with backoff** | 429 / 503 → wait 1s, 2s, 4s, retry (not on 400/401) |
+| **Show user-friendly errors** | Map status → "Session expired", "Too many tries" |
+| **Offline / network error** | `fetch` throws — catch separately from 4xx/5xx |
+| **Circuit breaker** | After N failures, stop calling API for a while |
+
+#### Decision: should the client retry?
+
+| Status | Retry? | Why |
+|--------|--------|-----|
+| `400`, `401`, `404` | ❌ | Client must fix input or login |
+| `409` | ❌ | Conflict — need different action |
+| `429` | ✅ after delay | Read `RateLimit-Reset` header |
+| `500`, `503` | ✅ limited retries | Maybe transient |
+| Network error | ✅ limited retries | Cable blip |
+
+**Force into Todo API (learning):**
+1. ~~Finish status-code fixes (steps 1–3)~~ ✅ done
+2. Add `POST /tasks/bulk` **idempotency key** header — duplicate key returns same result, not double insert
+3. In frontend: central `apiClient` with timeout + retry on 429/500
+
+**One line:** Handle failure on both sides — server returns honest status + message; client timeouts, retries wisely, and shows clear UI.
+
+---
+
+### ACID transactions
+
+**ACID** = four guarantees when **multiple database steps must succeed or fail together**.
+
+| Letter | Meaning | Plain English |
+|--------|---------|---------------|
+| **A** — Atomicity | All steps or none | Transfer money: debit + credit both happen, or neither |
+| **C** — Consistency | DB rules always hold | Unique email still unique after the operation |
+| **I** — Isolation | Concurrent ops don't corrupt each other | Two registers same email — one wins cleanly |
+| **D** — Durability | Committed data survives crash | After `201`, power loss doesn't erase the row |
+
+#### SQL vs MongoDB
+
+| | **PostgreSQL / MySQL** | **MongoDB (Mongoose)** |
+|---|------------------------|-------------------------|
+| Transactions | Built-in, multi-table | **Multi-document transactions** (replica set / Atlas) |
+| Typical unit | `BEGIN … COMMIT` | `session.startTransaction()` |
+| Your Todo API | N/A today | Single-doc updates don't need a transaction |
+
+**When single-document is enough (no transaction):**
+- `PATCH /tasks/:id` — one document update ✅
+
+**When you need a transaction (multi-step):**
+- Register user **and** create 3 default tasks — if tasks fail, roll back user
+- Move task to another user: update `userId` **and** write audit log document
+- Bulk bank-style: deduct credits **and** create task — both or neither
+
+#### MongoDB transaction sketch (future)
+
+```js
+const session = await mongoose.startSession();
+session.startTransaction();
+try {
+  await User.create([{ email, password }], { session });
+  await Task.insertMany(defaultTasks, { session });
+  await session.commitTransaction();
+} catch (e) {
+  await session.abortTransaction();
+  throw e;
+} finally {
+  session.endSession();
+}
+```
+
+**Trade-offs:**
+- Slower than single writes
+- Requires replica set (Atlas qualifies; local MongoDB needs `--replSet`)
+- Overkill for simple CRUD — use when **business rule spans multiple documents**
+
+**Force into Todo API (learning):**
+- `POST /auth/register` → atomically create user + welcome task `"Getting started"`
+- If task insert fails, user row is rolled back — no orphan accounts
+
+**One line:** Transactions = all-or-nothing multi-step DB work; learn on register+seed task, skip for simple single-task PATCH.
 
 ---
 
@@ -538,13 +784,13 @@ One place for **speed** (respond fast) and **observability** (know what broke in
 |-----|----------------|
 | **No tests (Supertest)** | Can't prove behavior or refactor safely — one change can break auth or ownership silently |
 | **No deploy / Atlas / CI/CD** | App only runs on your machine — no real users, no HTTPS, no pipeline |
-| **No `AppError` / validation library** | Errors still inconsistent — clients get vague 500s instead of exact 400/404/409 |
+| **No `AppError` / express-validator** | Core status codes work; JSON shape still `{ message }` only — no `{ errors[] }` yet |
 | **No Helmet** | Missing safe HTTP headers (XSS, clickjacking) — add before production |
-| **No MongoDB indexes** | Slow queries as data grows — filter/search on large `tasks` collection lags |
+| **No MongoDB indexes on tasks** | Slow queries as data grows — filter/search on large `tasks` collection lags |
 | **No logging / health check** | Hard to debug production — no request trail or uptime probe for load balancers |
 | **No pagination / caching** | `GET /tasks` gets slower and heavier as every user's tasks accumulate |
 | **Role auth not implemented** | `role` field exists but unused — admin vs user authorization missing |
-| **Async / edge cases** | Invalid ObjectId, unhandled promise rejections — real traffic exposes crashes |
+| **Malformed JSON / prod 500 hiding** | Bad JSON body and internal error detail hiding still pending |
 
 Work through these via [`todo.md`](todo.md) — backend breadth first, then hosting & CI/CD, frontend last.
 
@@ -553,8 +799,8 @@ Work through these via [`todo.md`](todo.md) — backend breadth first, then host
 | Stage | Rating | Status |
 |-------|--------|--------|
 | Tutorial clone | 3–4 | ✅ Past this |
-| Working API + auth + ownership | 5–6 | ✅ **You are here** |
-| Tests + deploy + structured errors | 6.5–7 | Next stretch |
+| Working API + auth + ownership + core errors | 5–6 | ✅ **You are here** |
+| Tests + deploy + AppError / validation lib | 6.5–7 | Next stretch |
 | Production hardening + CI/CD | 7.5–8 | After `todo.md` Phase 2–3 |
 | Senior backend Node | 8+ | Multiple systems / years |
 
@@ -567,8 +813,8 @@ Work through these via [`todo.md`](todo.md) — backend breadth first, then host
 | 1 | ✅ CRUD + filters + errors | Foundation — **done** |
 | 2 | ✅ `.gitignore` + `.env.example` | Secrets safety — **done** |
 | 3 | ✅ Auth (JWT) + task ownership | Users + own tasks — **done** |
-| 4 | **Exact API errors** (`AppError`, validation, status codes) | Client knows what failed |
-| 5 | Input validation (`express-validator`) | Safer API |
+| 4 | ✅ Status codes steps 1–3 — **`AppError` + error JSON shape** next | Client knows what failed |
+| 5 | Input validation (`express-validator`) | Safer API before more features |
 | 6 | ✅ Rate limiting — **Helmet** next | Basic security layer |
 | 7 | **Logging + health check** — see [API performance & monitoring](#api-performance--monitoring) | Debug production issues |
 | 8 | API versioning `/api/v1` | Clean future changes |

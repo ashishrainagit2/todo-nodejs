@@ -54,15 +54,38 @@ app.use((req, res) => {
 // global error handler — 4 parameters required!
 // Express recognizes error handlers by 4 arguments (err, req, res, next). Errors arrive via next(e) from your catch blocks — it turns crashes into JSON responses with 400 or 500.
 app.use((err, req, res, next) => {
-    console.log('Error:', err.message);
-    const status = err.status || (err.name === 'ValidationError' ? 400 : 500);
-    res.status(status).json({
-        message: err.message || 'Internal server error'
-    });
+    console.log('Error ===>:', err);
+
+    let status = err.statusCode || err.status || 500;
+    let message = err.message || 'Internal server error';
+
+    if (err.name === 'ValidationError') {
+        status = 400;
+        message = Object.values(err.errors)
+            .map((e) => e.message)
+            .join('; ');
+    } else if (err.name === 'CastError') {
+        status = 400;
+        message = 'Invalid id format';
+    } else if (err.code === 11000 || err.code === 11001) {
+        status = 409;
+        message = 'Email already registered';
+    }
+
+    res.status(status).json({ message });
 });
 
 mongoose.connect(process.env.DB_CONNECTION)
-    .then(() => console.log('Connected to database'))
+    .then(async () => {
+        console.log('Connected to database');
+        const User = require('./models/user');
+        try {
+            await User.syncIndexes();
+            console.log('User indexes synced (unique email)');
+        } catch (err) {
+            console.error('User index sync failed — remove duplicate emails first:', err.message);
+        }
+    })
     .catch((err) => console.error('Database connection error:', err.message));
 
 app.listen(process.env.PORT, () => {
