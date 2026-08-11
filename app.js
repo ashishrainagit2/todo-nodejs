@@ -1,8 +1,13 @@
 const express = require('express');
 const app = express();
 const cors = require('cors');
+const helmet = require('helmet');
 const mongoose = require('mongoose');
 require('dotenv/config');
+
+// Safe HTTP headers — nosniff, frame deny, CSP, HSTS (see learn.md §10b).
+// First middleware so even errors and 404s carry the headers.
+app.use(helmet());
 
 const parseOrigins = (value) =>
     value ? value.split(',').map((origin) => origin.trim()) : [];

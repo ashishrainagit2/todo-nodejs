@@ -33,7 +33,7 @@ One topic at a time. Pick a row, implement, test in Postman, move on.
 | 11 | Mark complete shortcut | `PATCH /tasks/:id/complete` | ❌ |
 | 12 | Role authorization | Use `role` field — admin vs user middleware | ❌ |
 | 13 | API versioning | `/api/v1/tasks` | ❌ |
-| 14 | Helmet | Secure HTTP headers | ❌ |
+| 14 | Helmet | Secure HTTP headers | ✅ |
 | 15 | Rate limiting | `express-rate-limit` on auth + API | ❌ |
 | 16 | Request logging | `morgan` — log method, URL, status | ❌ |
 | 17 | Health check | `GET /health` — server + DB status | ❌ |
