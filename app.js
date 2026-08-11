@@ -81,12 +81,12 @@ app.get('/health', (req, res) => {
     });
 });
 
-const TaskRoutes = require('./routes/task')
-const AuthRoutes = require('./routes/auth')
-const { apiLimiter, authLimiter } = require('./middleware/rateLimit')
+// API versioning — the prefix lives in one place so adding /api/v2 later
+// means one more mount, not edits scattered across route files.
+const V1_PREFIX = '/api/v1';
+const v1Routes = require('./routes/v1');
 
-app.use('/tasks', apiLimiter, TaskRoutes)
-app.use('/auth', authLimiter, AuthRoutes)
+app.use(V1_PREFIX, v1Routes);
 
 // handle 404
 app.use((req, res) => {
