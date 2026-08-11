@@ -1551,3 +1551,103 @@ Rate limit runs **before** auth and controllers — even failed `401` responses 
 
 See also: [`readme.md` — Rate limiting](readme.md#rate-limiting) and [API performance & monitoring](readme.md#api-performance--monitoring).
 
+---
+
+## 12. Request logging (morgan) + health check
+
+**Status:** ❌ not built yet — step 7 in the readme's suggested order
+
+Two related but **different** things: logging tells you what *happened*, the health check tells you whether the app is *alive*.
+
+---
+
+### Q: Why request logging?
+
+Today nothing records requests. When something breaks you only see whatever the global error handler prints — with no idea which request caused it.
+
+Morgan is middleware that logs **one line per request, after the response is sent**:
+
+```
+GET /tasks 200 12.483 ms - 1247
+POST /auth/login 401 89.201 ms - 38
+PATCH /tasks/6a733d 400 3.109 ms - 156
+```
+
+| Column | Meaning |
+|--------|---------|
+| `GET` | Method |
+| `/tasks` | URL |
+| `200` | Status code |
+| `12.483 ms` | **Response time** — first look at slow endpoints |
+| `1247` | Response size in bytes |
+
+That response-time column is the underrated one: it's how you'd notice a `$regex` search degrading as the `tasks` collection grows.
+
+### Where it goes
+
+Early in the chain, right after `helmet()` — so **404s and rate-limited 429s get logged too**.
+
+```js
+const morgan = require('morgan');
+
+app.use(helmet());
+app.use(morgan('dev'));   // local
+```
+
+| Format | Output | Use |
+|--------|--------|-----|
+| **`dev`** | Short, coloured by status | Local development |
+| **`combined`** | Apache combined (IP, user-agent, referrer) | Production — what log tooling expects |
+| **`tiny`** | Minimal | Noise reduction |
+
+### What morgan does **not** do
+
+| Limit | Fix later |
+|-------|-----------|
+| Logs **requests only** — knows nothing about internal app events | Keep logging in the global error handler |
+| **Unstructured text** — fine in a terminal, painful to search in a hosting dashboard | `winston` / `pino` → JSON logs with levels |
+| No request id, so multi-line traces can't be correlated | `X-Request-Id` + custom token |
+
+⚠️ **Never log the `Authorization` header or request bodies.** Morgan's built-in formats don't — but a custom token makes it easy to write tokens and passwords to disk forever.
+
+---
+
+### Q: Why a health check?
+
+`GET /health` is a tiny **public** endpoint answering "is this instance working?" Used by:
+
+- hosting platforms, to decide whether to keep routing traffic to this instance
+- uptime monitors
+- you, right after a deploy
+
+### It must check something real
+
+A handler that just returns `{ status: "ok" }` only proves Node is running — which stays true while MongoDB is unreachable and every real request fails.
+
+```js
+mongoose.connection.readyState   // 0 disconnected, 1 connected, 2 connecting, 3 disconnecting
+```
+
+| DB state | Status code | Why |
+|----------|-------------|-----|
+| `1` connected | **200** | Healthy |
+| anything else | **503** | The code platforms read as "pull this instance out of rotation" |
+
+### Three details that trip people up
+
+| Rule | Reason |
+|------|--------|
+| **No auth** | A load balancer has no JWT |
+| **Cheap** | Pinged as often as every 10s — `readyState` is a free property read; a real DB query per ping is not |
+| **No internals** | It's public — don't leak versions, env names, or connection strings |
+
+**Rate limiting:** our limiters are scoped to `/tasks` and `/auth`, so `/health` is unaffected — good, because a `429` on the health check makes a healthy app look dead to the platform.
+
+---
+
+### One-line summary
+
+**`morgan` gives one log line per request (method, URL, status, duration) — mounted early so 404s count; `GET /health` returns 200 only when `mongoose.connection.readyState === 1`, otherwise 503, unauthenticated and cheap.**
+
+See also: [`readme.md` — API performance & monitoring](readme.md#api-performance--monitoring).
+
