@@ -1170,16 +1170,19 @@ Full explanations in [10b. Safe HTTP headers](#10b-safe-http-headers--what-helme
 
 ### Quick cheat sheet — by route
 
+All routes are versioned: `/api/v1/...` (see [§13 API versioning](#13-api-versioning--apiv1)).
+
 | Request | Headers to send |
 |---------|-----------------|
-| `POST /auth/register` | `Content-Type: application/json` |
-| `POST /auth/login` | `Content-Type: application/json` |
-| `GET /tasks` | `Authorization: Bearer <token>` |
-| `POST /tasks` | `Content-Type` + `Authorization` |
-| `PATCH /tasks/:id` | `Content-Type` + `Authorization` |
-| `DELETE /tasks/:id` | `Authorization` only |
-| `DELETE /tasks/bulk` | `Content-Type` + `Authorization` |
-| `POST /tasks/bulk` | `Content-Type` + `Authorization` |
+| `POST /api/v1/auth/register` | `Content-Type: application/json` |
+| `POST /api/v1/auth/login` | `Content-Type: application/json` |
+| `GET /api/v1/tasks` | `Authorization: Bearer <token>` |
+| `POST /api/v1/tasks` | `Content-Type` + `Authorization` |
+| `PATCH /api/v1/tasks/:id` | `Content-Type` + `Authorization` |
+| `DELETE /api/v1/tasks/:id` | `Authorization` only |
+| `DELETE /api/v1/tasks/bulk` | `Content-Type` + `Authorization` |
+| `POST /api/v1/tasks/bulk` | `Content-Type` + `Authorization` |
+| `GET /health` | none — public, unversioned |
 
 ---
 
@@ -1733,4 +1736,137 @@ Elasticsearch / OpenSearch **is** the "database for logs" — a search engine bu
 **`morgan` gives one log line per request (method, URL, status, duration) — mounted early so 404s count; `GET /health` returns 200 only when `mongoose.connection.readyState === 1`, otherwise 503, unauthenticated and cheap.**
 
 See also: [`readme.md` — API performance & monitoring](readme.md#api-performance--monitoring).
+
+---
+
+## 13. API versioning — `/api/v1`
+
+**Status:** ✅ `routes/v1.js` + `V1_PREFIX` in `app.js`
+
+### Q: Why version an API?
+
+Because **you can change the code, but you can't change the clients**. Once something calls your API — a mobile app in the store, another team's service, a cron job — you can't force it to update on your schedule.
+
+| Reason | Example in this project |
+|--------|-------------------------|
+| **Breaking changes without breaking clients** | v1 errors are `{ message }`; a v2 could be `{ success, status, errors[] }` — both live at once |
+| **Clients migrate when ready** | Old app keeps using v1 while the new web app uses v2 |
+| **Honest deprecation** | v1 stays up, is announced as deprecated, removed on an agreed date |
+
+**What counts as breaking:** removing a field, renaming a field, changing a type, adding a required input, changing a status code. **Not** breaking: *adding* an optional field or a new endpoint — that's why you don't need a version for every change.
+
+---
+
+### Q: Where does the version go?
+
+| Style | Example | Notes |
+|-------|---------|-------|
+| **URL path** ✅ | `/api/v1/tasks` | Visible, cacheable, trivial to test in a browser/Postman — most common |
+| Header | `Accept: application/vnd.todo.v2+json` | "Purer" REST, but invisible and harder to debug |
+| Query param | `/tasks?version=2` | Easy to forget, messy with caching |
+
+This project uses the **path** — same as GitHub, Stripe-style major versions, and most public APIs.
+
+---
+
+### How it's wired
+
+**`routes/v1.js`** — everything the v1 contract covers, including which limiter guards each group:
+
+```js
+router.use('/tasks', apiLimiter, TaskRoutes);
+router.use('/auth', authLimiter, AuthRoutes);
+```
+
+**`app.js`** — one prefix, one mount:
+
+```js
+const V1_PREFIX = '/api/v1';
+const v1Routes = require('./routes/v1');
+
+app.use(V1_PREFIX, v1Routes);
+```
+
+**Why this shape:** `routes/task.js` and `routes/auth.js` don't know their own prefix — they only declare `'/'` and `'/:id'`. So a v2 is a new `routes/v2.js` plus one more `app.use`, with **no edits inside the individual route files**. A v2 can even reuse v1's task router while overriding only the endpoints that changed.
+
+```
+GET /api/v1/tasks/:id
+    │        │      │
+    │        │      └─ routes/task.js  → router.get('/:id', …)
+    │        └──────── routes/v1.js    → router.use('/tasks', …)
+    └───────────────── app.js          → app.use(V1_PREFIX, v1Routes)
+```
+
+---
+
+### Q: Why is `/health` not versioned?
+
+Because it describes the **server**, not the API contract. Load balancers and platform probes need one stable URL that never changes across versions. Same reasoning applies to `/metrics` and (later) `/api-docs`.
+
+---
+
+### Q: What about the old `/tasks` URLs?
+
+They now return **404** — a clean break, fine here because the only client is Postman.
+
+A real API with live clients would instead keep the old paths mounted alongside the new ones for a deprecation window, add a `Deprecation` / `Sunset` response header, and log usage to see who still calls them.
+
+⚠️ **Update your Postman collection** — keep the base URL in a collection variable (`{{baseUrl}}` = `http://localhost:3005/api/v1`) so the next version is one edit instead of one per request.
+
+---
+
+### Q: So from now on, do I make every change in v2?
+
+**No.** Most changes still go straight into v1 — only **breaking** ones need a new version.
+
+| Change | Where | Why |
+|--------|-------|-----|
+| Bug fix | **v1** | Clients want the fix |
+| New endpoint | **v1** | Old clients simply don't call it |
+| New **optional** field in a response | **v1** | Old clients ignore unknown fields |
+| Internal refactor | **v1** | No visible contract change |
+| Remove / rename a field | **v2** | Client code reading it breaks |
+| Change a field's type | **v2** | Parsing breaks |
+| Change a status code | **v2** | Error handling breaks |
+| Add a **required** input | **v2** | Existing requests become invalid |
+
+**Real examples from this project:**
+
+| Change already made | Breaking? |
+|---------------------|-----------|
+| Default `status`: `pending` → `not-started` | ⚠️ **Yes** — a client with `if (status === 'pending')` breaks |
+| Added `errors[]` alongside `message` | ✅ No — extra field, old clients still read `message` |
+| `AppError` reshaping errors to `{ success, status, message, errors[] }` | ⚠️ **Yes** — would be a v2 change |
+
+---
+
+### Q: Does v2 replace v1?
+
+**No — they run side by side.** That's the whole point: both are live, clients migrate at their own pace, and v1 is sunset on an announced date once nobody calls it.
+
+```js
+// app.js
+app.use('/api/v1', v1Routes);
+app.use('/api/v2', v2Routes);   // both serving traffic
+```
+
+### Q: Is v2 a copy of the project?
+
+**No — that's the trap.** Duplicating controllers per version means fixing every bug twice and the versions silently drifting apart.
+
+Reuse everything that didn't change and override only what did:
+
+```js
+// routes/v2.js — tasks changed; auth is identical, so reuse v1's router
+router.use('/tasks', apiLimiter, TaskRoutesV2);
+router.use('/auth', authLimiter, AuthRoutes);
+```
+
+Shared model, shared validation, shared business logic — the version-specific layer is usually thin, often just a different **response formatter**.
+
+---
+
+### One-line summary
+
+**Version in the URL path so breaking changes can ship without breaking existing clients: `routes/v1.js` owns the v1 contract, `app.js` mounts it at a single `V1_PREFIX`, and `/health` stays outside the version because it describes the server, not the API.**
 

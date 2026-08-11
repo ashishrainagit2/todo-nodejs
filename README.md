@@ -3,7 +3,11 @@
 Simple Node.js + Express + MongoDB todo backend.
 
 **Run:** `npm run start`  
-**Base URL:** `http://localhost:3005`
+**Base URL:** `http://localhost:3005/api/v1`
+
+All resource routes are versioned — `/api/v1/tasks`, `/api/v1/auth/login`. `GET /health` sits **outside** the version (it reports on the server, not the API contract).
+
+> Learning sections further down often write short paths like `POST /auth/register` when explaining concepts; the real path is `/api/v1/auth/register`.
 
 ---
 
@@ -90,24 +94,40 @@ Simple Node.js + Express + MongoDB todo backend.
 
 ## API quick reference
 
+Prefix every route below with `/api/v1`.
+
 | Method | URL | Action |
 |--------|-----|--------|
-| GET | `/tasks` | Get all (filter, search, sort) |
-| GET | `/tasks/:id` | Get one |
-| POST | `/tasks` | Create |
-| PATCH | `/tasks/:id` | Update |
-| DELETE | `/tasks/:id` | Delete one |
-| DELETE | `/tasks/bulk` | Delete many |
+| POST | `/api/v1/auth/register` | Create account |
+| POST | `/api/v1/auth/login` | Get JWT |
+| GET | `/api/v1/tasks` | Get all (filter, search, sort) |
+| GET | `/api/v1/tasks/:id` | Get one |
+| POST | `/api/v1/tasks` | Create |
+| POST | `/api/v1/tasks/bulk` | Create many (max 10) |
+| PATCH | `/api/v1/tasks/:id` | Update |
+| DELETE | `/api/v1/tasks/:id` | Delete one |
+| DELETE | `/api/v1/tasks/bulk` | Delete many |
+| GET | `/health` | Server + DB status (**unversioned**) |
 
 ### Examples
 
 ```
-GET  /tasks?status=pending&priority=high&sort=-dueDate
-GET  /tasks?search=meeting&tag=work
-POST /tasks          (JSON body)
-PATCH /tasks/:id     (JSON body)
-DELETE /tasks/bulk   { "ids": ["id1", "id2"] }
+GET  /api/v1/tasks?status=pending&priority=high&sort=-dueDate
+GET  /api/v1/tasks?search=meeting&tag=work
+POST /api/v1/tasks          (JSON body)
+PATCH /api/v1/tasks/:id     (JSON body)
+DELETE /api/v1/tasks/bulk   { "ids": ["id1", "id2"] }
 ```
+
+### Why version at all
+
+| Reason | Example |
+|--------|---------|
+| **Breaking changes without breaking clients** | v1 returns `{ message }` on errors, v2 returns `{ success, status, errors[] }` — both can run at once |
+| **Clients migrate on their own schedule** | Old mobile app keeps calling v1 while the web app moves to v2 |
+| **Honest deprecation** | v1 stays live, announced as deprecated, removed on a date |
+
+**Implementation:** `routes/v1.js` mounts `/tasks` and `/auth` (with their rate limiters); `app.js` mounts that router at one `V1_PREFIX` constant. A v2 would be `routes/v2.js` plus one more `app.use` — no edits inside individual route files.
 
 ---
 
@@ -119,8 +139,8 @@ Headers are **metadata** sent with requests and responses — not in the URL or 
 
 | Header | When required | Value | Example route |
 |--------|---------------|-------|---------------|
-| **`Content-Type`** | POST / PATCH with JSON body | `application/json` | `POST /tasks`, `POST /auth/register`, `PATCH /tasks/:id` |
-| **`Authorization`** | All `/tasks` routes | `Bearer <token>` | `GET /tasks`, `POST /tasks`, etc. |
+| **`Content-Type`** | POST / PATCH with JSON body | `application/json` | `POST /api/v1/tasks`, `POST /api/v1/auth/register` |
+| **`Authorization`** | All `/api/v1/tasks` routes | `Bearer <token>` | `GET /api/v1/tasks`, `POST /api/v1/tasks`, etc. |
 
 **Register / login** — need `Content-Type` only (no token yet).
 
@@ -351,6 +371,7 @@ todo_api/
 │   ├── auth.js         → JWT protect
 │   └── rateLimit.js    → apiLimiter + authLimiter
 ├── routes/
+│   ├── v1.js           → mounts /tasks + /auth under /api/v1
 │   ├── auth.js         → register, login
 │   └── task.js         → CRUD + bulk
 ├── controllers/
@@ -403,7 +424,7 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 | HTTP methods | GET read, POST create, PATCH update, DELETE remove | ✅ |
 | Clean URLs | `/tasks/:id` not `/getTask/:id` | ✅ |
 | Status codes | 200, 201, 400, 401, 404, 409, 429, 500 — mapped in global handler | ✅ steps 1–3 |
-| **API versioning** | `/api/v1/tasks` so you can change v2 without breaking clients | ❌ |
+| **API versioning** | `/api/v1/tasks` so you can change v2 without breaking clients | ✅ `routes/v1.js` + one prefix in `app.js` |
 | Pagination | `?page=1&limit=10` — don't return everything at once | ❌ |
 | **REST vs WebSocket vs gRPC** | HTTP JSON vs live channel vs service-to-service RPC | ❌ concept — see [WebSocket & gRPC](#websocket--grpc-vs-rest) |
 
@@ -892,7 +913,7 @@ Work through these via [`todo.md`](todo.md) — backend breadth first, then host
 | 5 | ✅ Input validation — hand-rolled, shared across write routes | Safer API before more features — **done** |
 | 6 | ✅ Rate limiting + ✅ Helmet | Basic security layer — **done** |
 | 7 | ✅ Logging + health check — see [`learn.md` §12](learn.md#12-request-logging-morgan--health-check) | Debug production issues — **done** |
-| 8 | API versioning `/api/v1` | Clean future changes |
+| 8 | ✅ API versioning `/api/v1` | Clean future changes — **done** |
 | 9 | Tests (Supertest) | Confidence before deploy |
 | 10 | Atlas + deploy + HTTPS + CI/CD | Go live |
 
