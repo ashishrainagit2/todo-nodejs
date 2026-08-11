@@ -749,6 +749,49 @@ That token is sent on every protected request (`GET /tasks`, etc.) as `Authoriza
 
 ---
 
+## 8b2. Task ownership — where `userId` comes from
+
+**Goal:** Trace one id from register → login token → `protect` → create/list tasks.
+
+Register does **not** put `userId` on tasks. MongoDB only creates the User’s `_id`. Tasks get `userId` later, when you create them with the same login token.
+
+### Id journey (table)
+
+| Step | What happens | Where | Field name |
+|------|--------------|-------|------------|
+| **1. Register** | MongoDB creates User | `User.create` → `users` collection | User `_id` (auto) |
+| **2. Login** | That `_id` is embedded in the JWT | `jwt.sign({ userId: user._id }, …)` | Payload `userId` |
+| **3. Any `/tasks` call** | Same token → `protect` verifies → loads User | `middleware/auth.js` | `req.user` (= User doc) |
+| **4. Create task** | Copy logged-in user’s id onto the task | `userId: req.user._id` in `createTask` | Task `userId` |
+| **5. Get / update / delete** | Filter so you only touch **your** tasks | `{ userId: req.user._id }` | Query filter |
+
+```
+REGISTER     User { _id: "6a71..." }          ← no tasks yet; no userId field on User
+    │
+LOGIN        jwt.sign({ userId: "6a71..." })  ← same id inside token
+    │
+POST /tasks  Authorization: Bearer <same token>
+    │           protect → jwt.verify → req.user._id
+    │           Task { …, userId: req.user._id }   ← link created here
+    │
+GET /tasks   filter = { userId: req.user._id }     ← only your tasks
+```
+
+### Naming cheat sheet
+
+| Place | Name | Same value? |
+|-------|------|-------------|
+| `users` collection | `_id` | ✅ |
+| JWT payload | `userId` | ✅ same as User `_id` |
+| `req.user` after protect | `req.user._id` | ✅ |
+| `tasks` collection | `userId` | ✅ points at that User |
+
+**One line:** Register makes the id → login puts it in the token → `protect` restores `req.user` → create task saves it as `userId` → list/update/delete filter by that `userId`.
+
+See also: [`authflow.md`](authflow.md) (JWT deep dive), [`mongoStructure.md`](mongoStructure.md) (linking collections).
+
+---
+
 ## 8c. Password hashing — does pre-save decrypt? (register vs login)
 
 **File:** `models/user.js` lines 23–28
@@ -937,6 +980,15 @@ Both trigger **`pre('save')`**.
 | DB | `User.create` | `User.findOne` |
 | Password | Hash on save (pre hook) | `bcrypt.compare` |
 | Response | User info, no token | Token + user |
+| User id | MongoDB creates `_id` | Embeds `_id` in JWT as `userId` |
+
+### Compare: auth vs task ownership
+
+| | **Register / Login** | **Create / Get tasks** |
+|---|---------------------|------------------------|
+| Auth | Public (no `protect`) | `router.use(protect)` — same Bearer token |
+| Id role | Create / embed User `_id` | `req.user._id` → task `userId` / filter |
+| Collection | `users` | `tasks` (linked via `userId`) |
 
 ### Related docs in this repo
 

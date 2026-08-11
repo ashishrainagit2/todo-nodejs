@@ -29,7 +29,7 @@ One topic at a time. Pick a row, implement, test in Postman, move on.
 | 7 | Input validation | `express-validator` or Joi — reject bad body early | ❌ |
 | 8 | Pagination | `?page=1&limit=10` on GET /tasks | ❌ |
 | 9 | Date filters | `?dueBefore=`, overdue tasks | ❌ |
-| 10 | Auto `updatedAt` | Set on every PATCH | ❌ |
+| 10 | Auto `updatedAt` | Schema `{ timestamps: true }` + allowlisted PATCH | ✅ |
 | 11 | Mark complete shortcut | `PATCH /tasks/:id/complete` | ❌ |
 | 12 | Role authorization | Use `role` field — admin vs user middleware | ❌ |
 | 13 | API versioning | `/api/v1/tasks` | ❌ |

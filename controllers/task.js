@@ -73,14 +73,38 @@ exports.createTask = async (req, res, next) => {
     }
 };
 
+const ALLOWED_TASK_UPDATES = [
+    'title',
+    'description',
+    'status',
+    'dueDate',
+    'priority',
+    'startReminder',
+    'tags',
+    'attachments',
+    'comments',
+    'subTasks',
+    'parentTask'
+];
+
 exports.updateTask = async (req, res, next) => {
     try {
-        const { userId, ...updates } = req.body;
+        const updates = {};
+        for (const key of ALLOWED_TASK_UPDATES) {
+            if (req.body[key] !== undefined) {
+                updates[key] = req.body[key];
+            }
+        }
 
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ message: 'No valid fields to update' });
+        }
+
+        // updatedAt bumped by schema { timestamps: true }; _id / userId / createdAt ignored
         const task = await Task.findOneAndUpdate(
             { _id: req.params.id, userId: req.user._id },
             updates,
-            { new: true }
+            { new: true, runValidators: true }
         );
         if (!task) {
             return res.status(404).json({ message: 'Task not found' });
@@ -129,10 +153,17 @@ exports.createTasksInBulk = async (req, res, next) => {
             return res.status(400).json({ message: 'Send an array of tasks in body.tasks' });
         }
 
-        const tasksWithUser = tasksFromBody.map((task) => ({
-            ...task,
-            userId: req.user._id
-        }));
+        const tasksWithUser = tasksFromBody.map((task) => {
+            const {
+                _id,
+                userId,
+                createdAt,
+                updatedAt,
+                __v,
+                ...fields
+            } = task;
+            return { ...fields, userId: req.user._id };
+        });
 
         const savedTasks = await Task.insertMany(tasksWithUser);
 
