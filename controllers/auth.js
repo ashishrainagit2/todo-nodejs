@@ -1,16 +1,17 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const User = require('../models/user');
+const AppError = require('../utils/AppError');
 
 exports.register = async (req, res, next) => {
     try {
-        const { email, password, role } = req.body;
+        const { email, password, role } = req.body ?? {};
 
         const existingUser = await User.findOne({ email });
         if (existingUser) {
-            const err = new Error('Email already registered');
-            err.status = 409;
-            return next(err);
+            throw new AppError('Email already registered', 409, [
+                { field: 'email', message: 'email is already registered' }
+            ]);
         }
 
         const user = await User.create({ email, password, role });
@@ -25,15 +26,16 @@ exports.register = async (req, res, next) => {
 
 exports.login = async (req, res, next) => {
     try {
-        const { email, password } = req.body;
+        const { email, password } = req.body ?? {};
         const user = await User.findOne({ email });
         if (!user) {
-            return res.status(401).json({ message: 'Invalid credentials' });
+            // same message for unknown email and wrong password — don't reveal which
+            throw new AppError('Invalid credentials', 401);
         }
 
-        const isMatch = await bcrypt.compare(password, user.password);
+        const isMatch = await bcrypt.compare(password ?? '', user.password);
         if (!isMatch) {
-            return res.status(401).json({ message: 'Invalid credentials' });
+            throw new AppError('Invalid credentials', 401);
         }
 
         const token = jwt.sign(

@@ -238,7 +238,7 @@ Your todo API uses JSON — `express.json()` is essential. `urlencoded` is optio
 
 ## 6. Global error handler — `(err, req, res, next)`
 
-**File:** `app.js` lines 54–62
+⚠️ **Superseded by [§14 Centralized error handling](#14-centralized-error-handling--the-apperror-class).** The handler shown below is the **first version**, kept because the Express mechanics (4-argument rule, `next(e)`, middleware order) still apply exactly. The response shape, status codes, and the "what it does NOT catch" table are all out of date — §14 has the current behaviour.
 
 ### Q: How does Express know this is an error handler?
 
@@ -349,10 +349,11 @@ Client request
       ▼
   controller    ← business logic
       │
-      ├── res.json()     → success response
-      ├── res.status(401) → auth fail (direct)
-      └── next(e)        → error handler
+      ├── res.json()          → success response
+      └── throw / next(err)   → global error handler → one JSON shape
 ```
+
+Since [§14](#14-centralized-error-handling--the-apperror-class), **every** failure takes the second branch — including `protect`'s 401s and the rate limiter's 429s, which used to answer directly.
 
 ---
 
@@ -365,8 +366,9 @@ Client request
 | `express.json()` | Parse JSON request body → `req.body` |
 | `express.urlencoded()` | Parse form request body → `req.body` |
 | `express.static('public')` | Serve static files |
-| 404 handler | Unknown route → JSON 404 |
-| Error handler `(err,...)` | Crashes → JSON 400/500 |
+| 404 handler | Unknown route → `AppError(404)` → error handler |
+| Error handler `(err,...)` | Every failure → one JSON shape; bugs → generic 500 |
+| `utils/AppError.js` | Marks errors whose message is safe to show the client |
 | `apiLimiter` / `authLimiter` | Cap requests per IP → `429` if over limit |
 
 ---
@@ -1869,4 +1871,265 @@ Shared model, shared validation, shared business logic — the version-specific 
 ### One-line summary
 
 **Version in the URL path so breaking changes can ship without breaking existing clients: `routes/v1.js` owns the v1 contract, `app.js` mounts it at a single `V1_PREFIX`, and `/health` stays outside the version because it describes the server, not the API.**
+
+---
+
+## 14. Centralized error handling — the `AppError` class
+
+**Status:** ✅ `utils/AppError.js` + rewritten handler in `app.js` (lines 130–161)
+
+Replaces the handler in [§6](#6-global-error-handler--err-req-res-next). Three problems with the old one, all fixed here:
+
+| Old problem | Consequence |
+|-------------|-------------|
+| `message: err.message` for **every** error | A `MongoServerError` or a stack-trace message went straight to the client |
+| Each controller built its own `res.status(400).json({ ... })` | Four different response shapes across the API |
+| `protect` and the rate limiter answered directly | 401s and 429s bypassed the handler entirely |
+
+---
+
+### Q: How many kinds of errors are there?
+
+**Two** — and the whole design is about telling them apart.
+
+| | **Operational errors** | **Programmer errors** (bugs) |
+|---|------------------------|------------------------------|
+| Meaning | Expected, part of normal operation | Something you didn't foresee |
+| Examples | Bad input, wrong password, task not found, duplicate email | Typo, `undefined` dereference, invalid regex reaching MongoDB |
+| Whose fault | Usually the client's | Yours |
+| Message is | Written **for** the client | Written for a Node developer — often leaks internals |
+| Client should see | The real message | **Nothing** — a generic 500 |
+| You should | Return a clear status code | Log it, then go fix the code |
+
+**Naming note:** `normaliseError` is not a *kind* of error — it's the function that sorts library errors into the operational bucket.
+
+---
+
+### The class
+
+```js
+class AppError extends Error {
+    constructor(message, statusCode, errors = []) {
+        super(message);
+
+        this.statusCode = statusCode;
+        this.errors = errors;
+        this.isOperational = true;
+
+        Error.captureStackTrace(this, this.constructor);
+    }
+}
+```
+
+| Piece | Why |
+|-------|-----|
+| **`extends Error`** | Still a real error — works with `throw`, `catch`, `instanceof`, and keeps a stack |
+| **`statusCode`** | The HTTP status travels *with* the error, so the handler doesn't have to guess |
+| **`errors = []`** | Optional per-field detail (`[{ field, message }]`) — same array validation already produced |
+| **`isOperational = true`** | The marker: "this message was written for the client" |
+| **`captureStackTrace`** | Drops the constructor frame so the stack points at the `throw` site, not at `AppError.js` |
+
+---
+
+### Q: Three sources, two categories
+
+Operational errors reach the handler two ways; everything else is a bug.
+
+```
+1. You raised it          throw new AppError('Task not found', 404)
+                                    │
+2. A library threw        ValidationError / CastError / 11000 / bad JSON
+   something known                  │  normaliseError() converts it
+                                    ▼
+                              ── AppError ──  → real message, your status code
+
+3. Anything else          TypeError, MongoServerError, …
+                                    │  normaliseError returns it unchanged
+                                    ▼
+                              plain Error   → logged in full, client gets 500
+```
+
+**`normaliseError` handles four library errors** — the ones this app actually hits:
+
+| Incoming | Becomes | Status |
+|----------|---------|--------|
+| Mongoose `ValidationError` | `Validation failed` + one entry per bad field | **400** |
+| Mongoose `CastError` | `Invalid id format` | **400** |
+| MongoDB `code 11000` | `Email already registered` | **409** |
+| `err.type === 'entity.parse.failed'` (body-parser) | `Malformed JSON in request body` | **400** |
+
+Its last line is the important one:
+
+```js
+    return err;   // not recognised → stays a plain Error → treated as a bug
+};
+```
+
+**Safe by default:** a library error you've never seen is hidden automatically. Exposing a message is opt-in — you have to wrap it in an `AppError`. The other way round, every new error type would leak until you noticed.
+
+---
+
+### The handler
+
+```js
+app.use((err, req, res, next) => {
+    const error = normaliseError(err);
+    const isKnown = error instanceof AppError;
+
+    if (!isKnown) {
+        console.error('Unhandled error ===>', error);
+    }
+
+    const statusCode = isKnown ? error.statusCode : 500;
+    const message = isKnown ? error.message : 'Something went wrong';
+
+    const body = { success: false, status: statusCode, message };
+
+    if (isKnown && error.errors.length > 0) {
+        body.errors = error.errors;
+    }
+
+    if (!isProduction && !isKnown) {
+        body.stack = error.stack;
+    }
+
+    res.status(statusCode).json(body);
+});
+```
+
+| Line | Why |
+|------|-----|
+| **`instanceof AppError`** | One check decides everything below it |
+| **`console.error` only when `!isKnown`** | A 404 isn't worth a log line; a bug is. Old handler logged every error at equal volume |
+| **`'Something went wrong'`** as a literal | Never `error.message` for a bug — that's the leak |
+| **`errors` added conditionally** | Clients don't get an empty array to check |
+| **`stack` only when `!isProduction`** | Useful locally, absent after deploy |
+
+---
+
+### The response shape (every error, one format)
+
+```json
+{
+  "success": false,
+  "status": 400,
+  "message": "Validation failed",
+  "errors": [
+    { "field": "title", "message": "title must be a string between 3 and 100 characters" }
+  ]
+}
+```
+
+| Field | Always present? |
+|-------|-----------------|
+| `success` | ✅ always `false` on errors |
+| `status` | ✅ mirrors the HTTP status code |
+| `message` | ✅ one human-readable sentence |
+| `errors` | Only when there's per-field detail |
+| `stack` | Only for **bugs**, only outside production |
+
+---
+
+### How controllers raise errors now
+
+```js
+// inside a try block — the catch forwards it
+throw new AppError('Task not found', 404);
+
+// outside a try block — hand it to Express yourself
+return next(new AppError('No valid fields to update', 400));
+
+// with field detail
+throw new AppError('Send an array of ids in the body', 400, [
+    { field: 'ids', message: 'ids must be a non-empty array' }
+]);
+```
+
+**Rule:** controllers never build error responses. The only `res.status(...)` calls left in `controllers/` are success paths (`200`, `201`).
+
+| Why `throw` inside `try`? | The existing `catch (e) { next(e) }` already forwards it — one exit path instead of two |
+
+---
+
+### Two behaviour changes worth remembering
+
+**1. 404 and 429 now go through the handler.**
+
+```js
+// unknown route — was res.status(404).json(...) directly
+app.use((req, res, next) => {
+    next(new AppError(`Route not found: ${req.method} ${req.originalUrl}`, 404));
+});
+```
+
+The rate limiter's handler does the same with a 429. Result: unknown routes, rate limits, validation failures and 500s all share one shape — a client can write a single error parser.
+
+**2. `middleware/auth.js` — `jwt.verify` got its own `try`.**
+
+Before, one `catch` wrapped both the token check *and* the database lookup:
+
+```js
+} catch (e) {
+    return res.status(401).json({ message: 'Not authorized, invalid token' });
+}
+```
+
+So a **database outage** during `User.findById` was reported as "invalid token" — a real outage disguised as a login problem. Now:
+
+| Step | Own try/catch | Failure means |
+|------|---------------|---------------|
+| `jwt.verify(token, secret)` | ✅ | Expired or tampered token → **401**, never a bug |
+| `User.findById(...)` | ✅ separate | User deleted → **401**; DB down → `next(e)` → **500** |
+
+**Lesson:** a `catch` block that's too wide turns bugs into misleading operational errors.
+
+---
+
+### Q: What was verified?
+
+Thirteen cases against a running server, all returning the unified shape:
+
+| Request | Status |
+|---------|--------|
+| Unknown route | 404 |
+| Malformed JSON body | 400 |
+| Wrong credentials | 401 |
+| No token / invalid token | 401 |
+| Duplicate registration | 409 |
+| Bad fields on create | 400 + `errors[]` |
+| Malformed id (`/tasks/not-an-id`) | 400 + `errors[]` |
+| Valid id, no such task | 404 |
+| Empty `PATCH` body | 400 |
+| Bulk over the 10-task limit | 400 |
+| Bulk delete with no `ids` | 400 |
+
+**The bug path**, tested with `GET /api/v1/tasks?search=[` — an invalid regex reaching MongoDB:
+
+```
+Client (production mode):
+  500 { "success": false, "status": 500, "message": "Something went wrong" }
+
+Server console:
+  Unhandled error ===> MongoServerError: Regular expression is invalid:
+  missing terminating ] for character class
+      at Connection.sendCommand (...)
+```
+
+Full detail for you, nothing for the attacker. In development the same response includes `stack`.
+
+⚠️ **That test exposed a separate real bug:** `getTasks` passes `req.query.search` straight into `$regex`, so any regex metacharacter changes the query's meaning — or crashes it. Needs escaping. See [`todo.md`](todo.md).
+
+---
+
+### Q: Is this a breaking change?
+
+**Yes** — the response shape went from `{ message }` to `{ success, status, message, errors? }`. By the rules in [§13](#13-api-versioning--apiv1) that's a **v2** change. It ships in v1 here because the only client is Postman; a real API with live clients would add the new shape under `/api/v2` and leave v1 answering the old way.
+
+---
+
+### One-line summary
+
+**Every error now flows through one handler in `app.js`. `AppError` marks the ones whose message is safe to show — raised deliberately or converted by `normaliseError` — and everything else is treated as a bug: logged in full, answered with a bare 500.**
+
+See also: [`readme.md`](readme.md) error handling section, [§6](#6-global-error-handler--err-req-res-next) for the Express mechanics, [§13](#13-api-versioning--apiv1) on why this counts as breaking.
 

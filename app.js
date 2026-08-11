@@ -6,6 +6,7 @@ const morgan = require('morgan');
 const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
+const AppError = require('./utils/AppError');
 require('dotenv/config');
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -88,33 +89,75 @@ const v1Routes = require('./routes/v1');
 
 app.use(V1_PREFIX, v1Routes);
 
-// handle 404
-app.use((req, res) => {
-    res.status(404).json({ message: 'Route not found' });
+// handle 404 — hand to the error handler so unknown routes get the same shape
+app.use((req, res, next) => {
+    next(new AppError(`Route not found: ${req.method} ${req.originalUrl}`, 404));
 });
 
-// global error handler — 4 parameters required!
-// Express recognizes error handlers by 4 arguments (err, req, res, next). Errors arrive via next(e) from your catch blocks — it turns crashes into JSON responses with 400 or 500.
-app.use((err, req, res, next) => {
-    console.log('Error ===>:', err);
-
-    let status = err.statusCode || err.status || 500;
-    let message = err.message || 'Internal server error';
+// Turn a known library error into an AppError. Anything not listed here is a bug.
+const normaliseError = (err) => {
+    if (err instanceof AppError) return err;
 
     if (err.name === 'ValidationError') {
-        status = 400;
-        message = Object.values(err.errors)
-            .map((e) => e.message)
-            .join('; ');
-    } else if (err.name === 'CastError') {
-        status = 400;
-        message = 'Invalid id format';
-    } else if (err.code === 11000 || err.code === 11001) {
-        status = 409;
-        message = 'Email already registered';
+        // Mongoose schema validation — report per field, like our own validators do
+        const errors = Object.values(err.errors).map((e) => ({
+            field: e.path,
+            message: e.message
+        }));
+        return new AppError('Validation failed', 400, errors);
     }
 
-    res.status(status).json({ message });
+    if (err.name === 'CastError') {
+        return new AppError('Invalid id format', 400, [
+            { field: err.path, message: `${err.path} must be a valid id` }
+        ]);
+    }
+
+    if (err.code === 11000 || err.code === 11001) {
+        return new AppError('Email already registered', 409, [
+            { field: 'email', message: 'email is already registered' }
+        ]);
+    }
+
+    // Body parser rejected the JSON before any route ran
+    if (err.type === 'entity.parse.failed') {
+        return new AppError('Malformed JSON in request body', 400);
+    }
+
+    return err;
+};
+
+// global error handler — 4 parameters required!
+// Express recognizes error handlers by 4 arguments (err, req, res, next). Errors arrive
+// via next(e) or a throw in a controller, and become the one JSON shape below.
+app.use((err, req, res, next) => {
+    const error = normaliseError(err);
+    const isKnown = error instanceof AppError;
+
+    // Unknown errors are bugs: log everything, tell the client nothing
+    if (!isKnown) {
+        console.error('Unhandled error ===>', error);
+    }
+
+    const statusCode = isKnown ? error.statusCode : 500;
+    const message = isKnown ? error.message : 'Something went wrong';
+
+    const body = {
+        success: false,
+        status: statusCode,
+        message
+    };
+
+    if (isKnown && error.errors.length > 0) {
+        body.errors = error.errors;
+    }
+
+    // Local debugging aid — never sent in production
+    if (!isProduction && !isKnown) {
+        body.stack = error.stack;
+    }
+
+    res.status(statusCode).json(body);
 });
 
 mongoose.connect(process.env.DB_CONNECTION)
