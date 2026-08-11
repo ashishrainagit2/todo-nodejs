@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 const { protect } = require('../middleware/auth');
+const { validateObjectId } = require('../middleware/validateObjectId');
 const {
     getTasks,
     getTaskById,
@@ -22,16 +23,16 @@ router.get('/', getTasks);
 router.delete('/bulk', deleteManyTasks);
 
 // GET /tasks/:id → one task
-router.get('/:id', getTaskById);
+router.get('/:id', validateObjectId(), getTaskById);
 
 // POST /tasks → create task
 router.post('/', createTask);
 
 // PATCH /tasks/:id → update task
-router.patch('/:id', updateTask);
+router.patch('/:id', validateObjectId(), updateTask);
 
 // DELETE /tasks/:id → delete one task
-router.delete('/:id', deleteTask);
+router.delete('/:id', validateObjectId(), deleteTask);
 
 // add multiple tasks
 router.post('/bulk', createTasksInBulk);
