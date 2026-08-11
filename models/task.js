@@ -11,8 +11,8 @@ const TaskSchema = mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ['pending', 'completed', 'in-progress'],
-        default: 'pending'
+        enum: ['not-started', 'pending', 'completed', 'in-progress'],
+        default: 'not-started'
     },
     dueDate: {
         type: Date,
@@ -21,7 +21,7 @@ const TaskSchema = mongoose.Schema({
     priority: {
         type: String,
         enum: ['low', 'medium', 'high'],
-        default: 'medium'
+        default: 'low'
     },
     startReminder: {
         type: Date,
