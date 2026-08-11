@@ -14,14 +14,6 @@ const TaskSchema = mongoose.Schema({
         enum: ['pending', 'completed', 'in-progress'],
         default: 'pending'
     },
-    createdAt: {
-        type: Date,
-        default: Date.now
-    },
-    updatedAt: {
-        type: Date,
-        default: Date.now
-    },
     dueDate: {
         type: Date,
         required: false
@@ -60,7 +52,7 @@ const TaskSchema = mongoose.Schema({
         ref: 'User',
         required: true
     }
-})
+}, { timestamps: true }); // createdAt + updatedAt — auto on create/update
 
 // collection name is task
 // Mongoose takes the model name 'Task' and automatically:

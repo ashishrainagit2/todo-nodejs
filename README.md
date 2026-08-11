@@ -49,12 +49,12 @@ Simple Node.js + Express + MongoDB todo backend.
 - ✅ Rate limiting — `express-rate-limit` on `/tasks` and `/auth` (see [Rate limiting](#rate-limiting))
 - ✅ Global error mapping — `CastError` → **400**, `ValidationError` → **400**, duplicate email → **409** (see [API error handling](#api-error-handling))
 - ✅ Unique email enforced — `User.syncIndexes()` on startup + `findOne` check on register
+- ✅ Auto-update `updatedAt` on PATCH — schema `{ timestamps: true }` + allowlisted fields
 
 ---
 
 ## 💡 In progress
 
-- 💡 Auto-update `updatedAt` on PATCH
 - 💡 Stronger input validation (`express-validator` — beyond Mongoose defaults)
 - 💡 Date filters (`?dueBefore=`, overdue tasks)
 - 💡 **`AppError` + consistent error JSON** — steps 1–3 done; shape + `AppError` class still pending
@@ -417,6 +417,16 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 | **Protect routes** | Middleware blocks `/tasks` if not logged in | ✅ |
 | **User owns tasks** | Each task linked to `userId` — users see only their data | ✅ |
 
+**Ownership id flow** (detail in [`learn.md` §8b2](learn.md#8b2-task-ownership--where-userid-comes-from)):
+
+| Step | What | Field |
+|------|------|-------|
+| Register | MongoDB creates User | `_id` |
+| Login | Embed in JWT | payload `userId` |
+| `/tasks` + `protect` | Same token → `req.user` | `req.user._id` |
+| Create task | Save on task | Task `userId` |
+| Get / update / delete | Filter by owner | `{ userId: req.user._id }` |
+
 ---
 
 ### 3️⃣ Security fundamentals
@@ -456,7 +466,7 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 | **MongoDB Atlas** | Cloud DB — only change `.env` connection string | ❌ |
 | **Indexes** | Speed up filter/search on large collections | ❌ |
 | **Query optimization** | Fetch only fields you need, avoid slow regex at scale | 💡 |
-| **Timestamps** | Auto `updatedAt` on every edit | 💡 |
+| **Timestamps** | Auto `createdAt` / `updatedAt` via `{ timestamps: true }` | ✅ |
 | **ACID transactions** | Multi-step writes all succeed or all roll back | ❌ concept — see [ACID transactions](#acid-transactions) |
 
 ---
@@ -498,6 +508,7 @@ Topics you asked to track **even if the Todo API doesn't need them yet**. Learn 
 | [WebSocket & gRPC](#websocket--grpc-vs-rest) | ❌ | Live task updates via WebSocket demo |
 | [Handle API failure](#handling-api-failure) | 💡 partial | Client retry + idempotent bulk create |
 | [ACID transactions](#acid-transactions) | ❌ | Register user + seed welcome task atomically |
+| [Gateways (glossary)](#gateways-common-terms) | ❌ | Call Stripe/Razorpay later; API Gateway only at microservices scale |
 
 ---
 
@@ -698,6 +709,68 @@ try {
 
 ---
 
+### Gateways (common terms)
+
+A **gateway** is a **middle door**: traffic or data goes through it before reaching the real system. Same word, different jobs — don't mix them up.
+
+#### Core idea
+
+```
+Client / app  →  Gateway  →  Real service (your API, bank, SMS provider, …)
+```
+
+The gateway **translates, secures, routes, or hides complexity** so callers don't talk to every backend directly.
+
+#### Common gateway types (backend / cloud)
+
+| Term | What it does | Examples | Todo API? |
+|------|--------------|----------|-----------|
+| **API Gateway** | Single entry for many services — auth, rate limit, routing, versioning | Kong, AWS API Gateway, nginx, Azure APIM | ❌ overkill (one Express app) |
+| **Payment Gateway** | Talks to banks/cards; you never store raw card data | Stripe, Razorpay, PayPal, Braintree | ❌ unless you add paid plans |
+| **SMS Gateway** | Sends/receives text messages via telecom | Twilio, MSG91, Vonage | ❌ optional 2FA later |
+| **Email Gateway / ESP** | Delivers email at scale (not always called “gateway”) | SendGrid, SES, Mailgun, Resend | ❌ welcome emails later |
+| **Push / notification gateway** | Routes push to FCM / APNs | Firebase, OneSignal | ❌ mobile later |
+| **IoT Gateway** | Bridge between devices (MQTT/Zigbee) and cloud APIs | AWS IoT, Azure IoT Hub | ❌ not this project |
+| **Media / VoIP Gateway** | Voice/video protocol conversion | Twilio Voice, Asterisk | ❌ |
+| **NAT Gateway** | Private servers reach the internet with a public IP | AWS NAT Gateway | ❌ cloud networking |
+| **Internet Gateway** | VPC ↔ public internet | AWS Internet Gateway | ❌ cloud networking |
+| **Application Gateway** | L7 load balance + WAF (Azure name) | Azure Application Gateway | ❌ infra |
+| **Storage Gateway** | On-prem storage ↔ cloud buckets | AWS Storage Gateway | ❌ |
+| **Webhook Gateway** | Receives/verifies vendor callbacks in one place | Svix, custom proxy | ❌ if many webhooks |
+
+#### Related words (not always “gateway”, same neighborhood)
+
+| Term | How it differs |
+|------|----------------|
+| **Reverse proxy** | Forwards HTTP to your app (nginx, Caddy) — often *part of* an API Gateway |
+| **Load balancer** | Spreads traffic across many servers — may sit in front of or inside a gateway |
+| **BFF (Backend for Frontend)** | One API shaped for one UI (Next.js) — like a small app-specific gateway |
+| **Service mesh** | Sidecars between microservices (Istio, Linkerd) — east-west traffic, not the public front door |
+| **Adapter / SDK** | Your code calls Stripe's library — *you* are the client; Stripe *is* the payment gateway |
+
+#### API Gateway vs Payment Gateway (don't confuse)
+
+| | **API Gateway** | **Payment Gateway** |
+|---|-----------------|---------------------|
+| Job | Route/secure **your** APIs | Process **money** |
+| You build? | Rarely yourself at start — use Kong/cloud | Almost never yourself — use Stripe/Razorpay |
+| Touches Todo API? | Only if you split into many microservices | Only if you charge users |
+
+```
+Browser → API Gateway → Task service, Auth service, …
+App     → Payment Gateway → Bank / card network
+```
+
+#### Force into Todo API (learning, later)
+
+1. **Payment:** Stripe Checkout for a “Pro todos” plan — never store card numbers.
+2. **Email/SMS:** send “task due” via Resend or Twilio (background job + queue).
+3. **API Gateway:** skip until you have **multiple** services; Express + rate limit + auth is enough for one app.
+
+**One line:** Gateway = front door to something hard (APIs, payments, SMS); learn the names now, add Stripe/email when a feature needs it — not for basic CRUD.
+
+---
+
 ## API performance & monitoring
 
 One place for **speed** (respond fast) and **observability** (know what broke in production). Topics below map to sections 4–7 in the learning path; implement in [`todo.md`](todo.md) after auth and structured errors.
@@ -841,8 +914,8 @@ Work through these via [`todo.md`](todo.md) — backend breadth first, then host
 | File | Topic |
 |------|-------|
 | `authflow.md` | JWT, sign, verify, token creation |
+| `learn.md` | dotenv, cors, json, errors, routes, **headers**, **rate limiting**, **task ownership / userId flow** |
 | `mongoStructure.md` | Collections, documents, linking |
-| `learn.md` | dotenv, cors, json, errors, routes, **headers**, **rate limiting** Q&A |
 | `opensource.md` | **Commercial OSS Node projects** — Cal.com, PostHog, Vendure, YC, Google, study guide |
 | `todo.md` | Full future work checklist |
 
