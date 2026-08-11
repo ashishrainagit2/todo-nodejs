@@ -67,6 +67,20 @@ app.use(express.urlencoded({ extended: true }));
 // express.static() serves static files from the 'public' directory — it's for serving files like images, CSS, and JavaScript, not for converting the response.
 app.use(express.static('public'));
 
+// Health check (see learn.md §12) — public, unauthenticated, no rate limit.
+// readyState is a property read, not a query, so this stays cheap when polled every few seconds.
+// 1 = connected; anything else means real requests would fail, so report 503 and let the
+// platform take this instance out of rotation.
+app.get('/health', (req, res) => {
+    const dbConnected = mongoose.connection.readyState === 1;
+
+    res.status(dbConnected ? 200 : 503).json({
+        status: dbConnected ? 'ok' : 'unavailable',
+        db: dbConnected ? 'connected' : 'disconnected',
+        uptime: Math.floor(process.uptime())
+    });
+});
+
 const TaskRoutes = require('./routes/task')
 const AuthRoutes = require('./routes/auth')
 const { apiLimiter, authLimiter } = require('./middleware/rateLimit')
