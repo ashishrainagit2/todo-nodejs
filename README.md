@@ -50,12 +50,13 @@ Simple Node.js + Express + MongoDB todo backend.
 - ✅ Global error mapping — `CastError` → **400**, `ValidationError` → **400**, duplicate email → **409** (see [API error handling](#api-error-handling))
 - ✅ Unique email enforced — `User.syncIndexes()` on startup + `findOne` check on register
 - ✅ Auto-update `updatedAt` on PATCH — schema `{ timestamps: true }` + allowlisted fields
+- ✅ Stronger input validation — hand-rolled, shared by create / update / bulk (no library); field-level `errors[]`, trim + enum normalising, array caps, past-date and date-order rules, unknown-field rejection, `:id` checked before the DB
+- ✅ Helmet — safe HTTP headers, `app.use(helmet())` as first middleware (see [`learn.md` §10b](learn.md#10b-safe-http-headers--what-helmet-actually-does))
 
 ---
 
 ## 💡 In progress
 
-- 💡 Stronger input validation (`express-validator` — beyond Mongoose defaults)
 - 💡 Date filters (`?dueBefore=`, overdue tasks)
 - 💡 **`AppError` + consistent error JSON** — steps 1–3 done; shape + `AppError` class still pending
 
@@ -75,7 +76,7 @@ Simple Node.js + Express + MongoDB todo backend.
 
 - ❌ `AppError` class — `throw new AppError('Task not found', 404)` + one handler
 - ❌ Consistent error JSON shape — `{ success, status, message, errors[] }`
-- ❌ Field-level validation errors — `{ field: "title", message: "required" }`
+- ✅ Field-level validation errors — `{ field: "title", message: "..." }` on create / update / bulk (bulk labels them `tasks[2].title`)
 - ✅ `409 Conflict` for duplicate email — `findOne` + `next(err)` **409**, MongoDB `11000` backup, unique index via `syncIndexes()`
 - ❌ `403 Forbidden` for role-based routes (admin vs user)
 - ✅ Invalid MongoDB id format → `400` — global handler, `CastError`
@@ -160,7 +161,7 @@ Postman often omits `Origin` — that's why CORS issues mainly appear in the bro
 | `Accept` | Client says what format it wants back | Optional — JSON default |
 | `Cookie` / `Set-Cookie` | Session auth alternative to JWT | ❌ not implemented |
 | `X-Request-Id` | Trace one request across logs | ❌ future |
-| Security headers (`Helmet`) | `X-Content-Type-Options`, etc. | ❌ see `todo.md` |
+| Security headers (`Helmet`) | `X-Content-Type-Options`, `X-Frame-Options`, CSP, HSTS | ✅ `app.use(helmet())` |
 | `RateLimit-*` | Requests left, window reset | ✅ on `/tasks` and `/auth` |
 
 See [`learn.md`](learn.md) section 10 for header types explained in depth.
@@ -434,10 +435,10 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 | Topic | One line | Status |
 |-------|----------|--------|
 | **Environment secrets** | `.env` for DB URL, JWT secret — never commit to git | ✅ |
-| **Helmet** | Safe HTTP headers (XSS, clickjacking protection) | ❌ |
+| **Helmet** | Safe HTTP headers (XSS, clickjacking protection) | ✅ — see [`learn.md` §10b](learn.md#10b-safe-http-headers--what-helmet-actually-does) |
 | **CORS** | Which frontends may call your API — whitelist by env | ✅ |
 | **Rate limiting** | Max requests per IP/time — stops abuse & DDoS | ✅ `express-rate-limit` — see [Rate limiting](#rate-limiting) |
-| **Input validation** | Reject bad data before DB (`express-validator`) | 💡 Mongoose only |
+| **Input validation** | Reject bad data before DB — hand-rolled rules shared by create / update / bulk | ✅ |
 | **NoSQL injection** | Don't pass raw user input into queries | 💡 OK with Mongoose |
 | **HTTPS** | Encrypt traffic — required in production | ❌ on deploy |
 | **Password hashing** | Never store plain passwords (`bcrypt`) | ✅ |
@@ -857,8 +858,7 @@ One place for **speed** (respond fast) and **observability** (know what broke in
 |-----|----------------|
 | **No tests (Supertest)** | Can't prove behavior or refactor safely — one change can break auth or ownership silently |
 | **No deploy / Atlas / CI/CD** | App only runs on your machine — no real users, no HTTPS, no pipeline |
-| **No `AppError` / express-validator** | Core status codes work; JSON shape still `{ message }` only — no `{ errors[] }` yet |
-| **No Helmet** | Missing safe HTTP headers (XSS, clickjacking) — add before production |
+| **No `AppError`** | Task write routes return `{ message, errors[] }`; everything else is still `{ message }` only — no single error class or shape |
 | **No MongoDB indexes on tasks** | Slow queries as data grows — filter/search on large `tasks` collection lags |
 | **No logging / health check** | Hard to debug production — no request trail or uptime probe for load balancers |
 | **No pagination / caching** | `GET /tasks` gets slower and heavier as every user's tasks accumulate |
@@ -887,8 +887,8 @@ Work through these via [`todo.md`](todo.md) — backend breadth first, then host
 | 2 | ✅ `.gitignore` + `.env.example` | Secrets safety — **done** |
 | 3 | ✅ Auth (JWT) + task ownership | Users + own tasks — **done** |
 | 4 | ✅ Status codes steps 1–3 — **`AppError` + error JSON shape** next | Client knows what failed |
-| 5 | Input validation (`express-validator`) | Safer API before more features |
-| 6 | ✅ Rate limiting — **Helmet** next | Basic security layer |
+| 5 | ✅ Input validation — hand-rolled, shared across write routes | Safer API before more features — **done** |
+| 6 | ✅ Rate limiting + ✅ Helmet | Basic security layer — **done** |
 | 7 | **Logging + health check** — see [API performance & monitoring](#api-performance--monitoring) | Debug production issues |
 | 8 | API versioning `/api/v1` | Clean future changes |
 | 9 | Tests (Supertest) | Confidence before deploy |
@@ -909,12 +909,41 @@ Work through these via [`todo.md`](todo.md) — backend breadth first, then host
 
 ---
 
+## Miscellaneous tasks
+
+*(Learning-driven — not required by the app, done to understand what a library does for you)*
+
+### ❌ Build my own rate limiter
+
+Replace `express-rate-limit` on `/tasks` with a hand-rolled version. Keep the library on `/auth` while learning, so a bug in my own middleware can't lock me out of login.
+
+**The easy part:** `req.ip` plus a `Map` of `key → { count, resetAt }` — a fixed-window limiter is ~20 lines.
+
+**The parts that are actually hard:**
+
+| Problem | Why it bites |
+|---------|--------------|
+| **Map grows forever** | Every IP stays in memory until restart — needs an expiry sweep, and the interval must be `unref()`'d so it doesn't keep Node alive |
+| **Per-process counters** | Two instances (PM2 cluster / 2 dynos) = two separate counts = double the real limit. Shared store (Redis) is the hard part, not the algorithm |
+| **`req.ip` behind a proxy** | On Render / Railway every request looks like it comes from the load balancer → one shared bucket for all users. Needs `app.set('trust proxy', n)` |
+| **Trusting `X-Forwarded-For`** | Trust it blindly and a client forges it for a fresh quota per fake IP — trust exactly as many hops as the infra has |
+| **IP ≠ user** | Office / university NAT shares one IP across hundreds of people; mobile IPs rotate |
+| **Fixed window bursts** | 10/15min allows 10 at 14:59 + 10 at 15:01 = 20 in two minutes → sliding window or token bucket |
+
+**Design decision:** key `/tasks` on `req.user._id` (routes are behind `protect`, so real per-user fairness, no NAT collateral); keep IP keying for `/auth`, where there is no user yet.
+
+**Response details to match the library:** `429` JSON body, `Retry-After` header, and `RateLimit-*` standard headers.
+
+See also: [Rate limiting](#rate-limiting) for the current library setup, `learn.md` for the Q&A.
+
+---
+
 ## Related docs
 
 | File | Topic |
 |------|-------|
 | `authflow.md` | JWT, sign, verify, token creation |
-| `learn.md` | dotenv, cors, json, errors, routes, **headers**, **rate limiting**, **task ownership / userId flow** |
+| `learn.md` | dotenv, cors, json, errors, routes, **headers**, **safe/security headers (Helmet)**, **rate limiting**, **task ownership / userId flow** |
 | `mongoStructure.md` | Collections, documents, linking |
 | `opensource.md` | **Commercial OSS Node projects** — Cal.com, PostHog, Vendure, YC, Google, study guide |
 | `todo.md` | Full future work checklist |

