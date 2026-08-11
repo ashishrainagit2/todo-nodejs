@@ -1,11 +1,11 @@
 const rateLimit = require('express-rate-limit');
+const AppError = require('../utils/AppError');
 
 const windowMs = Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000;
 
-const jsonLimitHandler = (req, res) => {
-    res.status(429).json({
-        message: 'Too many requests, please try again later',
-    });
+// hand off to the global handler so 429s use the same shape as every other error
+const jsonLimitHandler = (req, res, next) => {
+    next(new AppError('Too many requests, please try again later', 429));
 };
 
 // General API — per IP, all /tasks routes

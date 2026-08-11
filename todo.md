@@ -37,7 +37,7 @@ One topic at a time. Pick a row, implement, test in Postman, move on.
 | 15 | Rate limiting | `express-rate-limit` on auth + API | ✅ |
 | 16 | Request logging | `morgan` — log method, URL, status | ✅ |
 | 17 | Health check | `GET /health` — server + DB status | ✅ |
-| 18 | Structured errors | Custom `AppError` class, consistent JSON | ❌ |
+| 18 | Structured errors | Custom `AppError` class, consistent JSON | ✅ |
 | 19 | MongoDB indexes | Index `userId`, `status`, `dueDate` on tasks | ❌ |
 | 20 | In-memory cache | Cache GET /tasks, invalidate on write | ❌ |
 | 21 | Redis cache | Shared cache — optional after in-memory | ❌ |
@@ -45,6 +45,7 @@ One topic at a time. Pick a row, implement, test in Postman, move on.
 | 23 | Richer schema | subTasks / comments as nested objects or new collections | ❌ |
 | 24 | API tests | Supertest — auth + CRUD + ownership | ❌ |
 | 25 | Swagger / OpenAPI | Auto API docs from routes | ❌ |
+| 26 | Escape `?search` regex | `req.query.search` goes straight into `$regex` — metacharacters break or hijack the query | ❌ |
 
 ---
 

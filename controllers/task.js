@@ -1,4 +1,5 @@
 const Task = require('../models/task');
+const AppError = require('../utils/AppError');
 
 exports.getTasks = async (req, res, next) => {
     try {
@@ -39,12 +40,10 @@ exports.getTaskById = async (req, res, next) => {
     try {
         const task = await Task.findOne({ _id: req.params.id, userId: req.user._id });
         if (!task) {
-            return res.status(404).json({ message: 'Task not found' });
+            throw new AppError('Task not found', 404);
         }
         res.json(task);
     } catch (e) {
-        console.error('Error getting task by id: ', e);
-        console.log('Error status getting task by id: ', e.status);
         next(e);
     }
 };
@@ -200,14 +199,13 @@ const validateTaskBody = (body, { partial = false, prefix = '' } = {}) => {
     return { errors, value };
 };
 
-const validationFailed = (res, errors) =>
-    res.status(400).json({ message: 'Validation failed', errors });
+const validationError = (errors) => new AppError('Validation failed', 400, errors);
 
 exports.createTask = async (req, res, next) => {
     const { errors, value } = validateTaskBody(req.body);
 
     if (errors.length > 0) {
-        return validationFailed(res, errors);
+        return next(validationError(errors));
     }
 
     try {
@@ -224,11 +222,11 @@ exports.updateTask = async (req, res, next) => {
     const { errors, value: updates } = validateTaskBody(req.body, { partial: true });
 
     if (errors.length > 0) {
-        return validationFailed(res, errors);
+        return next(validationError(errors));
     }
 
     if (Object.keys(updates).length === 0) {
-        return res.status(400).json({ message: 'No valid fields to update' });
+        return next(new AppError('No valid fields to update', 400));
     }
 
     try {
@@ -241,14 +239,14 @@ exports.updateTask = async (req, res, next) => {
                 .select('dueDate startReminder');
 
             if (!stored) {
-                return res.status(404).json({ message: 'Task not found' });
+                throw new AppError('Task not found', 404);
             }
 
             const dueDate = updates.dueDate ?? stored.dueDate;
             const startReminder = updates.startReminder ?? stored.startReminder;
 
             if (dueDate && startReminder && startReminder > dueDate) {
-                return validationFailed(res, [
+                throw validationError([
                     { field: 'startReminder', message: DATE_ORDER_MESSAGE }
                 ]);
             }
@@ -261,7 +259,7 @@ exports.updateTask = async (req, res, next) => {
             { new: true, runValidators: true }
         );
         if (!task) {
-            return res.status(404).json({ message: 'Task not found' });
+            throw new AppError('Task not found', 404);
         }
         res.json(task);
     } catch (e) {
@@ -271,10 +269,12 @@ exports.updateTask = async (req, res, next) => {
 
 exports.deleteManyTasks = async (req, res, next) => {
     try {
-        const { ids } = req.body;
+        const ids = req.body?.ids;
 
         if (!Array.isArray(ids) || ids.length === 0) {
-            return res.status(400).json({ message: 'Send an array of ids in the body' });
+            throw new AppError('Send an array of ids in the body', 400, [
+                { field: 'ids', message: 'ids must be a non-empty array' }
+            ]);
         }
 
         const result = await Task.deleteMany({ _id: { $in: ids }, userId: req.user._id });
@@ -291,7 +291,7 @@ exports.deleteTask = async (req, res, next) => {
     try {
         const task = await Task.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
         if (!task) {
-            return res.status(404).json({ message: 'Task not found' });
+            throw new AppError('Task not found', 404);
         }
         res.json({ message: 'Task deleted', task });
     } catch (e) {
@@ -303,16 +303,20 @@ const BULK_CREATE_LIMIT = 10;
 
 exports.createTasksInBulk = async (req, res, next) => {
     try {
-        const tasksFromBody = req.body.tasks;
+        const tasksFromBody = req.body?.tasks;
 
         if (!Array.isArray(tasksFromBody) || tasksFromBody.length === 0) {
-            return res.status(400).json({ message: 'Send an array of tasks in body.tasks' });
+            throw new AppError('Send an array of tasks in body.tasks', 400, [
+                { field: 'tasks', message: 'tasks must be a non-empty array' }
+            ]);
         }
 
         if (tasksFromBody.length > BULK_CREATE_LIMIT) {
-            return res.status(400).json({
-                message: `Send at most ${BULK_CREATE_LIMIT} tasks per request (received ${tasksFromBody.length})`
-            });
+            throw new AppError(
+                `Send at most ${BULK_CREATE_LIMIT} tasks per request (received ${tasksFromBody.length})`,
+                400,
+                [{ field: 'tasks', message: `tasks allows at most ${BULK_CREATE_LIMIT} items` }]
+            );
         }
 
         // every element is checked, so the client fixes the whole batch in one round trip
@@ -332,7 +336,7 @@ exports.createTasksInBulk = async (req, res, next) => {
         });
 
         if (errors.length > 0) {
-            return validationFailed(res, errors);
+            throw validationError(errors);
         }
 
         const savedTasks = await Task.insertMany(tasksWithUser);

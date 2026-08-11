@@ -28,12 +28,12 @@ All resource routes are versioned — `/api/v1/tasks`, `/api/v1/auth/login`. `GE
 - ✅ Task model & schema
 - ✅ REST CRUD routes
 - ✅ Controllers folder (routes + controllers split)
-- ✅ Create task — `POST /tasks`
-- ✅ Get all tasks — `GET /tasks`
-- ✅ Get one task — `GET /tasks/:id`
-- ✅ Update task — `PATCH /tasks/:id`
-- ✅ Delete one task — `DELETE /tasks/:id`
-- ✅ Delete many tasks — `DELETE /tasks/bulk`
+- ✅ Create task — `POST /api/v1/tasks`
+- ✅ Get all tasks — `GET /api/v1/tasks`
+- ✅ Get one task — `GET /api/v1/tasks/:id`
+- ✅ Update task — `PATCH /api/v1/tasks/:id`
+- ✅ Delete one task — `DELETE /api/v1/tasks/:id`
+- ✅ Delete many tasks — `DELETE /api/v1/tasks/bulk`
 - ✅ Filter by status — `?status=pending`
 - ✅ Filter by priority — `?priority=high`
 - ✅ Filter by tag — `?tag=work`
@@ -47,7 +47,7 @@ All resource routes are versioned — `/api/v1/tasks`, `/api/v1/auth/login`. `GE
 - ✅ JWT auth — register, login, `protect`
 - ✅ Password hashing (bcrypt)
 - ✅ Task ownership — `userId` on all task routes
-- ✅ Bulk create — `POST /tasks/bulk`
+- ✅ Bulk create — `POST /api/v1/tasks/bulk` (max 10 per request)
 - ✅ `.gitignore` + `.env.example`
 - ✅ Unique email on user
 - ✅ Rate limiting — `express-rate-limit` on `/tasks` and `/auth` (see [Rate limiting](#rate-limiting))
@@ -58,6 +58,7 @@ All resource routes are versioned — `/api/v1/tasks`, `/api/v1/auth/login`. `GE
 - ✅ Helmet — safe HTTP headers, `app.use(helmet())` as first middleware (see [`learn.md` §10b](learn.md#10b-safe-http-headers--what-helmet-actually-does))
 - ✅ Request logging — `morgan` (`dev` locally, `combined` + `logs/access.log` in dev; stdout only in production), `/health` skipped
 - ✅ Health check — `GET /health` → **200** `{ status, db, uptime }`, **503** when MongoDB is not connected
+- ✅ API versioning — all routes under `/api/v1` via `routes/v1.js` + one prefix in `app.js` (see [`learn.md` §13](learn.md#13-api-versioning--apiv1))
 
 ---
 
