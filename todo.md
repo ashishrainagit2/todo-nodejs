@@ -34,9 +34,9 @@ One topic at a time. Pick a row, implement, test in Postman, move on.
 | 12 | Role authorization | Use `role` field — admin vs user middleware | ❌ |
 | 13 | API versioning | `/api/v1/tasks` | ❌ |
 | 14 | Helmet | Secure HTTP headers | ✅ |
-| 15 | Rate limiting | `express-rate-limit` on auth + API | ❌ |
-| 16 | Request logging | `morgan` — log method, URL, status | ❌ |
-| 17 | Health check | `GET /health` — server + DB status | ❌ |
+| 15 | Rate limiting | `express-rate-limit` on auth + API | ✅ |
+| 16 | Request logging | `morgan` — log method, URL, status | ✅ |
+| 17 | Health check | `GET /health` — server + DB status | ✅ |
 | 18 | Structured errors | Custom `AppError` class, consistent JSON | ❌ |
 | 19 | MongoDB indexes | Index `userId`, `status`, `dueDate` on tasks | ❌ |
 | 20 | In-memory cache | Cache GET /tasks, invalidate on write | ❌ |
@@ -89,11 +89,13 @@ One topic at a time. Pick a row, implement, test in Postman, move on.
 
 | Order | Pick | Why |
 |-------|------|-----|
-| 1 | Input validation (#7) | Safer API before more features |
-| 2 | Pagination (#8) | Real apps never return all rows |
-| 3 | Helmet + rate limit (#14, #15) | Quick security wins |
-| 4 | Health check + morgan (#16, #17) | Production debugging basics |
-| 5 | Supertest (#24) | Lock in what you built before deploy |
+| 1 | ✅ Input validation (#7) | Safer API before more features |
+| 2 | ✅ Helmet + rate limit (#14, #15) | Quick security wins |
+| 3 | ✅ Health check + morgan (#16, #17) | Production debugging basics |
+| 4 | Structured errors — `AppError` (#18) | One error shape across every route |
+| 5 | API versioning (#13) → then Swagger docs | Version before documenting, or the spec gets rewritten |
+| 6 | Pagination (#8) | Real apps never return all rows |
+| 7 | Supertest (#24) | Lock in what you built before deploy |
 
 ---
 

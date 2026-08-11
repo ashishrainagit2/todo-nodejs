@@ -52,6 +52,8 @@ Simple Node.js + Express + MongoDB todo backend.
 - ✅ Auto-update `updatedAt` on PATCH — schema `{ timestamps: true }` + allowlisted fields
 - ✅ Stronger input validation — hand-rolled, shared by create / update / bulk (no library); field-level `errors[]`, trim + enum normalising, array caps, past-date and date-order rules, unknown-field rejection, `:id` checked before the DB
 - ✅ Helmet — safe HTTP headers, `app.use(helmet())` as first middleware (see [`learn.md` §10b](learn.md#10b-safe-http-headers--what-helmet-actually-does))
+- ✅ Request logging — `morgan` (`dev` locally, `combined` + `logs/access.log` in dev; stdout only in production), `/health` skipped
+- ✅ Health check — `GET /health` → **200** `{ status, db, uptime }`, **503** when MongoDB is not connected
 
 ---
 
@@ -452,8 +454,8 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 | **404 handler** | Unknown URL → JSON, not HTML | ✅ |
 | **Global error handler** | One `app.use(err, req, res, next)` for all crashes | ✅ |
 | **`next(err)` in controllers** | Pass errors up instead of duplicate responses | ✅ |
-| **Structured logging** | Log requests + errors (`morgan`, `winston`) | ❌ |
-| **Health check** | `GET /health` — is server alive? | ❌ |
+| **Structured logging** | Log requests + errors | ✅ `morgan` requests — `winston` JSON logs still ❌ |
+| **Health check** | `GET /health` — is server alive? | ✅ 200 / 503 on DB state |
 | **Meaningful error messages** | Exact status + message per failure type | ✅ steps 1–3 — see [API error handling](#api-error-handling) |
 | **Handle API failure (client + server)** | Timeouts, retry, idempotency, circuit breaker | 💡 partial — see [Handling API failure](#handling-api-failure) |
 
@@ -621,7 +623,7 @@ Browser/App          Network              Your API              Database
 | **Don't leak internals** | Hide stack traces in production | ❌ |
 | **Global error handler** | One place for crashes | ✅ |
 | **Graceful shutdown** | Finish in-flight requests before kill | ❌ deploy topic |
-| **Health check** | `GET /health` for load balancer | ❌ |
+| **Health check** | `GET /health` for load balancer | ✅ |
 | **Idempotency** | Same request twice = safe (e.g. duplicate POST) | ❌ |
 
 #### Client-side (your Next.js app later)
@@ -793,19 +795,19 @@ One place for **speed** (respond fast) and **observability** (know what broke in
 
 | Topic | What it does | Status | Where to learn |
 |-------|--------------|--------|----------------|
-| **Request logging** | `morgan` — method, URL, status, response time in console | ❌ | [§4 Error handling & logging](#4️⃣-error-handling--logging) |
+| **Request logging** | `morgan` — method, URL, status, response time | ✅ | [`learn.md` §12](learn.md#12-request-logging-morgan--health-check) |
 | **Structured logs** | `winston` — JSON logs with levels (info, warn, error) for prod | ❌ | [§4](#4️⃣-error-handling--logging) |
-| **Health check** | `GET /health` → `{ status: "ok", db: "connected" }` for load balancers | ❌ | [§4](#4️⃣-error-handling--logging) |
+| **Health check** | `GET /health` → `{ status, db, uptime }`, 503 when DB is down | ✅ | [`learn.md` §12](learn.md#12-request-logging-morgan--health-check) |
 | **Error tracking** | Sentry / similar — capture stack traces from production | ❌ | After deploy |
 | **APM / metrics** | Datadog, New Relic, Prometheus — latency, throughput, slow queries | ❌ | Production / team tooling |
 | **Alerting** | Notify when error rate or latency spikes | ❌ | With hosting or APM |
 
 **Minimal stack for this Todo API (learning):**
 
-1. **`morgan('dev')`** in `app.js` — see every request while developing.
-2. **`GET /health`** — ping DB with `mongoose.connection.readyState`.
-3. **`winston`** (optional) — replace `console.log` in error handler before deploy.
-4. **Hosting dashboard** (Render/Railway) — CPU, memory, restarts after you deploy.
+1. ✅ **`morgan`** in `app.js` — `dev` locally, `combined` + `logs/access.log`; production logs to stdout only.
+2. ✅ **`GET /health`** — `mongoose.connection.readyState`, 200 / 503, skipped by the logger.
+3. **`winston`** (next) — replace `console.log` in the error handler before deploy.
+4. **Hosting dashboard** (Render/Railway/AWS/Azure) — CPU, memory, restarts after you deploy.
 
 **Not in scope yet:** full APM dashboards, distributed tracing, custom metrics — add when the API is live and you need to debug real traffic.
 
@@ -860,7 +862,7 @@ One place for **speed** (respond fast) and **observability** (know what broke in
 | **No deploy / Atlas / CI/CD** | App only runs on your machine — no real users, no HTTPS, no pipeline |
 | **No `AppError`** | Task write routes return `{ message, errors[] }`; everything else is still `{ message }` only — no single error class or shape |
 | **No MongoDB indexes on tasks** | Slow queries as data grows — filter/search on large `tasks` collection lags |
-| **No logging / health check** | Hard to debug production — no request trail or uptime probe for load balancers |
+| **No structured (JSON) logs** | `morgan` gives a request trail, but plain text — `winston`/`pino` levels + JSON still pending for searchable production logs |
 | **No pagination / caching** | `GET /tasks` gets slower and heavier as every user's tasks accumulate |
 | **Role auth not implemented** | `role` field exists but unused — admin vs user authorization missing |
 | **Malformed JSON / prod 500 hiding** | Bad JSON body and internal error detail hiding still pending |
@@ -889,7 +891,7 @@ Work through these via [`todo.md`](todo.md) — backend breadth first, then host
 | 4 | ✅ Status codes steps 1–3 — **`AppError` + error JSON shape** next | Client knows what failed |
 | 5 | ✅ Input validation — hand-rolled, shared across write routes | Safer API before more features — **done** |
 | 6 | ✅ Rate limiting + ✅ Helmet | Basic security layer — **done** |
-| 7 | **Logging + health check** — see [API performance & monitoring](#api-performance--monitoring) | Debug production issues |
+| 7 | ✅ Logging + health check — see [`learn.md` §12](learn.md#12-request-logging-morgan--health-check) | Debug production issues — **done** |
 | 8 | API versioning `/api/v1` | Clean future changes |
 | 9 | Tests (Supertest) | Confidence before deploy |
 | 10 | Atlas + deploy + HTTPS + CI/CD | Go live |

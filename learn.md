@@ -1555,7 +1555,7 @@ See also: [`readme.md` — Rate limiting](readme.md#rate-limiting) and [API perf
 
 ## 12. Request logging (morgan) + health check
 
-**Status:** ❌ not built yet — step 7 in the readme's suggested order
+**Status:** ✅ both built — `app.js` (morgan + `GET /health`)
 
 Two related but **different** things: logging tells you what *happened*, the health check tells you whether the app is *alive*.
 
@@ -1642,6 +1642,89 @@ mongoose.connection.readyState   // 0 disconnected, 1 connected, 2 connecting, 3
 | **No internals** | It's public — don't leak versions, env names, or connection strings |
 
 **Rate limiting:** our limiters are scoped to `/tasks` and `/auth`, so `/health` is unaffected — good, because a `429` on the health check makes a healthy app look dead to the platform.
+
+---
+
+### What this project built
+
+**Logging** (`app.js`, two morgan mounts — each request passes through both):
+
+```js
+const skipHealthCheck = (req) => req.path === '/health';
+
+app.use(morgan(isProduction ? 'combined' : 'dev', { skip: skipHealthCheck }));
+
+if (!isProduction) {
+    app.use(morgan('combined', {
+        stream: fs.createWriteStream(path.join(logsDir, 'access.log'), { flags: 'a' }),
+        skip: skipHealthCheck
+    }));
+}
+```
+
+| Detail | Why |
+|--------|-----|
+| **`req.path` not `req.url`** | `url` keeps the query string — `/health?probe=1` would slip past the skip |
+| **`flags: 'a'`** | Append. The default `'w'` truncates the file on every restart |
+| **`path.join(__dirname, …)`** | Resolves next to the file, not to whatever directory `npm start` ran from |
+| **`createWriteStream` once at startup** | No file-open cost per request |
+| **File write only when `!isProduction`** | Container disks are ephemeral and the file grows unbounded — production logs to stdout for CloudWatch / Azure Monitor to capture |
+| **Mounted above `express.json()`** | Fine, morgan doesn't read bodies. A custom body token would have to move below the parser |
+
+**Health check** (`app.js`, before the route mounts):
+
+```js
+app.get('/health', (req, res) => {
+    const dbConnected = mongoose.connection.readyState === 1;
+
+    res.status(dbConnected ? 200 : 503).json({
+        status: dbConnected ? 'ok' : 'unavailable',
+        db: dbConnected ? 'connected' : 'disconnected',
+        uptime: Math.floor(process.uptime())
+    });
+});
+```
+
+```
+GET /health → 200 {"status":"ok","db":"connected","uptime":25}
+```
+
+`uptime` is process seconds — handy for spotting silent restarts. No version or env details: the endpoint is public.
+
+---
+
+### Q: Do production apps log response bodies?
+
+**No — it's the exception**, and always deliberate.
+
+| Reason to avoid | Detail |
+|-----------------|--------|
+| **Volume** | A body can be 100× the log line; log storage is billed per GB ingested |
+| **Privacy** | Bodies hold user data — and a login response holds the JWT, kept for the whole retention window |
+| **Performance** | Capturing a body means buffering the response instead of streaming it |
+
+**What is logged instead:** metadata — status, duration, size, route, request id, user id. For "why did this fail?", the error handler logs the raised error + stack (Sentry-style), so you get the reason without recording the payload.
+
+**When bodies are logged:** opt-in, **redacted** (`password`, `token`, `authorization` → `[REDACTED]`), sampled or errors-only, short retention. AWS API Gateway can do it — off by default, switched on to debug. Regulated domains (fintech, healthcare) keep exact payloads in dedicated encrypted audit stores, not app logs.
+
+---
+
+### Q: Where do access logs live in real apps? (not Redis)
+
+**Redis is the wrong tool** — in-memory means RAM prices for write-once data, with no retention policies or full-text search. Its real jobs here are caching, rate-limit counters, sessions. It *can* be a **buffer** in a pipeline (app → Redis stream → shipper → log store), which is the pipe, not the warehouse.
+
+| Setup | Where logs live |
+|-------|-----------------|
+| Single VPS | Files on disk + `logrotate`; plus nginx's own `/var/log/nginx/access.log` |
+| PM2 | `~/.pm2/logs/*.log` + `pm2-logrotate` |
+| Self-hosted, multi-server | Grafana **Loki** (log-specific, cheap), **OpenSearch**/ELK, **ClickHouse** at high volume |
+| Managed cloud | CloudWatch Logs, Azure Monitor (KQL), or SaaS — Datadog, Better Stack, Papertrail |
+
+**The app's only job is to print to stdout** — everything above is infrastructure capturing that stream, no Express changes needed. That's why `combined` matters: every one of those tools parses it out of the box.
+
+Elasticsearch / OpenSearch **is** the "database for logs" — a search engine built for append-heavy writes and text queries, which Mongo and Redis are not.
+
+⚠️ **On deploy:** `app.set('trust proxy', 1)`, or every logged IP is the load balancer's, not the client's.
 
 ---
 
