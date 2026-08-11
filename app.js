@@ -2,12 +2,35 @@ const express = require('express');
 const app = express();
 const cors = require('cors');
 const helmet = require('helmet');
+const morgan = require('morgan');
+const fs = require('fs');
+const path = require('path');
 const mongoose = require('mongoose');
 require('dotenv/config');
+
+const isProduction = process.env.NODE_ENV === 'production';
 
 // Safe HTTP headers — nosniff, frame deny, CSP, HSTS (see learn.md §10b).
 // First middleware so even errors and 404s carry the headers.
 app.use(helmet());
+
+// Request logging (see learn.md §12) — mounted early so 404s and 429s are logged too.
+// A health check pinged every 10s would bury real traffic.
+const skipHealthCheck = (req) => req.path === '/health';
+
+app.use(morgan(isProduction ? 'combined' : 'dev', { skip: skipHealthCheck }));
+
+// Local history only. Container disks are ephemeral, so in production we log to
+// stdout and let the platform (CloudWatch / Azure Monitor) capture it.
+if (!isProduction) {
+    const logsDir = path.join(__dirname, 'logs');
+    fs.mkdirSync(logsDir, { recursive: true });
+
+    app.use(morgan('combined', {
+        stream: fs.createWriteStream(path.join(logsDir, 'access.log'), { flags: 'a' }),
+        skip: skipHealthCheck
+    }));
+}
 
 const parseOrigins = (value) =>
     value ? value.split(',').map((origin) => origin.trim()) : [];
