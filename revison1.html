@@ -1,0 +1,2059 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Node Gazette — Revision Notes I</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+:root{
+  --comic:"Comic Sans MS","Comic Neue","Chalkboard SE","Segoe Print",cursive;
+  --mono:"Consolas","Courier New",monospace;
+  --ink:#111;
+  --paper:#fbfaf7;
+  --rule:#111;
+  --muted:#5a5a5a;
+}
+
+*{box-sizing:border-box}
+
+html{scroll-behavior:smooth}
+
+body{
+  margin:0;
+  background:
+    repeating-linear-gradient(0deg,rgba(0,0,0,.012) 0 1px,transparent 1px 4px),
+    var(--paper);
+  color:var(--ink);
+  font-family:var(--comic);
+  font-size:18px;
+  line-height:1.62;
+}
+
+.sheet{
+  max-width:1080px;
+  margin:0 auto;
+  padding:28px 26px 90px;
+}
+
+/* ------------------------------------------------ masthead */
+.masthead{border-bottom:6px double var(--rule);margin-bottom:6px}
+
+.masthead .kicker{
+  display:flex;justify-content:space-between;align-items:flex-end;
+  font-size:13px;letter-spacing:.18em;text-transform:uppercase;
+  border-bottom:2px solid var(--rule);padding-bottom:6px;
+}
+
+.masthead h1{
+  font-size:clamp(40px,8.5vw,86px);
+  line-height:.95;
+  margin:16px 0 8px;
+  text-align:center;
+  letter-spacing:-.01em;
+}
+
+.masthead h1 small{display:block;font-size:.3em;letter-spacing:.32em;margin-top:14px;font-weight:400}
+
+.dateline{
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;
+  border-top:2px solid var(--rule);border-bottom:2px solid var(--rule);
+  padding:6px 2px;font-size:13px;text-transform:uppercase;letter-spacing:.12em;margin-bottom:26px;
+}
+
+/* ------------------------------------------------ abstract + contents */
+.lede{
+  columns:2;column-gap:34px;column-rule:1px solid #ccc;
+  font-size:17px;margin-bottom:26px;
+}
+.lede p{margin:0 0 12px}
+.lede p:first-child::first-letter{
+  float:left;font-size:64px;line-height:.8;padding:4px 8px 0 0;font-weight:700;
+}
+
+.contents{
+  border:3px solid var(--rule);padding:16px 20px 12px;margin:0 0 44px;
+  background:#fff;
+  box-shadow:6px 6px 0 #111;
+}
+.contents h2{
+  margin:0 0 12px;font-size:20px;letter-spacing:.22em;text-transform:uppercase;
+  border-bottom:2px solid var(--rule);padding-bottom:6px;
+}
+.contents ol{margin:0;padding:0;list-style:none;columns:3;column-gap:26px;font-size:15px}
+.contents li{margin-bottom:5px;break-inside:avoid}
+.contents a{color:var(--ink);text-decoration:none;border-bottom:1px dotted #999}
+.contents a:hover{background:#111;color:#fff;border-bottom-color:#111}
+.contents .num{display:inline-block;min-width:24px;font-weight:700}
+
+/* ------------------------------------------------ chapters */
+.chapter{border-top:3px solid var(--rule);padding-top:22px;margin-top:46px}
+
+.chapter > h2{
+  display:flex;align-items:center;gap:14px;
+  font-size:clamp(26px,4.2vw,40px);line-height:1.1;margin:0 0 6px;
+  text-transform:uppercase;letter-spacing:.01em;
+}
+.chapter > h2 .badge{
+  flex:0 0 auto;background:#111;color:#fff;
+  width:52px;height:52px;display:grid;place-items:center;
+  font-size:24px;font-weight:700;
+}
+.chapter .standfirst{margin:0 0 22px;font-size:17px;color:var(--muted);font-style:italic}
+
+h3{
+  font-size:23px;margin:30px 0 10px;
+  border-bottom:2px solid var(--rule);display:inline-block;padding-bottom:2px;
+}
+h4{font-size:19px;margin:22px 0 8px;text-decoration:underline;text-decoration-style:wavy;text-underline-offset:4px}
+
+p{margin:0 0 14px}
+ul,ol{margin:0 0 16px;padding-left:26px}
+li{margin-bottom:7px}
+strong{font-weight:700}
+code{font-family:var(--mono);font-size:.88em;background:#f0efe9;padding:1px 5px;border:1px solid #ddd}
+
+/* ------------------------------------------------ labelled blocks */
+.tag{
+  display:inline-block;background:#111;color:#fff;
+  font-size:12px;letter-spacing:.24em;text-transform:uppercase;
+  padding:4px 12px;margin:24px 0 0;
+}
+.block{border:2px solid var(--rule);padding:14px 18px;margin:0 0 4px;background:#fff}
+.block > :last-child{margin-bottom:0}
+
+pre{
+  font-family:var(--mono);font-size:14px;line-height:1.55;
+  background:#fff;border:2px solid var(--rule);
+  padding:14px 16px;margin:0 0 16px;overflow-x:auto;
+  box-shadow:4px 4px 0 #e6e4dc;
+}
+pre .c{color:#6a6a6a;font-style:italic}
+pre b{font-weight:700}
+
+.terminal{background:#111;color:#fff;border-color:#111;box-shadow:4px 4px 0 #bdbbb2}
+.terminal .c{color:#b9b9b9}
+
+blockquote{
+  margin:22px 0;padding:14px 20px;border-left:8px solid var(--rule);
+  background:#f2f1eb;font-size:18px;
+}
+blockquote p:last-child{margin:0}
+
+.gotcha{
+  border:3px dashed var(--rule);background:#fff;padding:14px 18px;margin:22px 0;
+}
+.gotcha .head{font-weight:700;text-transform:uppercase;letter-spacing:.14em;font-size:14px;margin-bottom:6px}
+
+table{border-collapse:collapse;width:100%;margin:0 0 18px;font-size:16px;background:#fff}
+th,td{border:2px solid var(--rule);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#111;color:#fff;text-transform:uppercase;font-size:13px;letter-spacing:.1em}
+
+/* ------------------------------------------------ figures */
+figure{margin:26px 0;border:2px solid var(--rule);background:#fff;padding:14px 14px 6px}
+figure svg{display:block;width:100%;height:auto}
+figcaption{
+  border-top:2px solid var(--rule);margin-top:10px;padding-top:6px;
+  font-size:13px;text-transform:uppercase;letter-spacing:.14em;
+}
+
+svg .b{fill:#fff;stroke:#111;stroke-width:2}
+svg .bk{fill:#111;stroke:#111;stroke-width:2}
+svg .hatch{fill:url(#hatch);stroke:#111;stroke-width:2}
+svg .t{font-family:var(--comic);font-size:14px;fill:#111}
+svg .tb{font-family:var(--comic);font-size:14px;font-weight:700;fill:#111}
+svg .ts{font-family:var(--comic);font-size:11.5px;fill:#333}
+svg .tsw{font-family:var(--comic);font-size:11.5px;fill:#fff}
+svg .tw{font-family:var(--comic);font-size:14px;font-weight:700;fill:#fff}
+svg .m{font-family:var(--mono);font-size:12px;fill:#111}
+svg .ar{stroke:#111;stroke-width:2;fill:none;marker-end:url(#ah)}
+svg .ar-d{stroke:#111;stroke-width:2;fill:none;stroke-dasharray:6 4;marker-end:url(#ah)}
+svg .gl{stroke:#111;stroke-width:1;opacity:.35}
+
+.foot{
+  border-top:6px double var(--rule);margin-top:60px;padding-top:14px;
+  font-size:13px;text-transform:uppercase;letter-spacing:.16em;
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;
+}
+.top{color:var(--ink);text-decoration:none;border-bottom:1px dotted #999}
+
+@media (max-width:760px){
+  body{font-size:17px}
+  .lede{columns:1}
+  .contents ol{columns:1}
+  .chapter > h2 .badge{width:42px;height:42px;font-size:20px}
+}
+
+@media print{
+  body{background:#fff}
+  .contents{box-shadow:none}
+  pre{box-shadow:none}
+  .chapter{page-break-inside:avoid}
+}
+</style>
+</head>
+<body>
+
+<!-- shared arrow head + hatch pattern for every diagram -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#111"></path>
+    </marker>
+    <pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="0" x2="0" y2="7" stroke="#111" stroke-width="2"></line>
+    </pattern>
+    <pattern id="dots" width="6" height="6" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.1" fill="#111"></circle>
+    </pattern>
+  </defs>
+</svg>
+
+<div class="sheet" id="top">
+
+<header class="masthead">
+  <div class="kicker">
+    <span>Vol. 1 &nbsp;·&nbsp; No. 1</span>
+    <span>Backend Desk</span>
+    <span>Price: Free</span>
+  </div>
+  <h1>The Node Gazette
+    <small>Revision Notes &mdash; Book I</small>
+  </h1>
+  <div class="dateline">
+    <span>Node.js &nbsp;·&nbsp; Express 5 &nbsp;·&nbsp; MongoDB</span>
+    <span>Project: <b>todo_api</b></span>
+    <span>Author: Ashish Raina</span>
+  </div>
+</header>
+
+<div class="lede">
+  <p>This page is the same material as <b>revision-1.md</b>, set as a textbook. Every chapter is written in
+  three fixed parts, so revision is always the same drill: what you installed, the code that matters, and
+  the logic behind it.</p>
+  <p><b>Package installed</b> &mdash; the <code>npm install</code> line, or a note that the feature is built
+  into express. <b>Important code</b> &mdash; only the lines worth remembering, copied from this project rather
+  than from a tutorial. <b>Logic</b> &mdash; why the code exists, what breaks without it, and the gotcha that
+  cost time.</p>
+  <p>Read it in the order printed. The chapters follow the path of a single HTTP request: it is created,
+  logged, checked for origin, parsed, routed, authenticated, validated, answered &mdash; and if anything goes
+  wrong, funnelled through one error handler.</p>
+</div>
+
+<nav class="contents">
+  <h2>Contents</h2>
+  <ol>
+    <li><span class="num">0</span><a href="#c0">Setup</a></li>
+    <li><span class="num">1</span><a href="#c1">Creating a server</a></li>
+    <li><span class="num">2</span><a href="#c2">Versioning</a></li>
+    <li><span class="num">3</span><a href="#c3">Important middlewares</a></li>
+    <li><span class="num">4</span><a href="#c4">Database connection</a></li>
+    <li><span class="num">5</span><a href="#c5">Simple API</a></li>
+    <li><span class="num">6</span><a href="#c6">Auth &amp; authorization</a></li>
+    <li><span class="num">7</span><a href="#c7">CORS</a></li>
+    <li><span class="num">8</span><a href="#c8">Safe headers</a></li>
+    <li><span class="num">9</span><a href="#c9">Error handling</a></li>
+    <li><span class="num">10</span><a href="#c10">MVC &amp; folders</a></li>
+    <li><span class="num">11</span><a href="#c11">Rate limiting</a></li>
+    <li><span class="num">12</span><a href="#c12">Swagger</a></li>
+    <li><span class="num">13</span><a href="#c13">Validation</a></li>
+    <li><span class="num">14</span><a href="#c14">Health check</a></li>
+    <li><span class="num">15</span><a href="#c15">Request logging</a></li>
+    <li><span class="num">16</span><a href="#c16">Middleware order</a></li>
+    <li><span class="num">17</span><a href="#c17">Ownership scoping</a></li>
+    <li><span class="num">18</span><a href="#c18">Query features</a></li>
+    <li><span class="num">19</span><a href="#c19">Bulk endpoints</a></li>
+    <li><span class="num">20</span><a href="#c20">Schema detail</a></li>
+    <li><span class="num">&mdash;</span><a href="#remaining">What is left</a></li>
+  </ol>
+</nav>
+
+<!-- ============================================================ 0 -->
+<section class="chapter" id="c0">
+  <h2><span class="badge">0</span> Setup</h2>
+  <p class="standfirst">Node, npm, a restarting dev server, and secrets kept out of git.</p>
+
+  <span class="tag">Package installed</span>
+  <pre class="terminal"><span class="c"># install Node.js first (gives you node + npm)</span>
+npm init            <span class="c"># creates package.json</span>
+npm install nodemon <span class="c"># restarts the server on every file save</span>
+npm install dotenv  <span class="c"># reads .env into process.env</span></pre>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">// package.json</span>
+"type": "commonjs",
+"scripts": {
+    "start": "nodemon app.js",
+    "start:debug": "nodemon --inspect app.js"
+}</pre>
+  <pre><span class="c">// app.js — first line, before anything reads process.env</span>
+require('dotenv/config');</pre>
+  <pre>.env            real secrets — never committed (listed in .gitignore)
+.env.example    same keys, fake values — this one IS committed</pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li><code>nodemon</code> is a dev tool only. In production the host runs <code>node app.js</code>.</li>
+      <li><code>require('dotenv/config')</code> must run <b>before</b> any file reads
+        <code>process.env</code>, otherwise those values are <code>undefined</code>.</li>
+      <li><code>.env</code> holds <code>PORT</code>, <code>DB_CONNECTION</code>, <code>JWT_SECRET</code>,
+        <code>JWT_EXPIRES_IN</code>, <code>CORS_ORIGIN</code>, <code>RATE_LIMIT_*</code>.</li>
+      <li><code>.env.example</code> exists so another developer knows which keys to create without ever
+        seeing your secrets.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================ 1 -->
+<section class="chapter" id="c1">
+  <h2><span class="badge">1</span> Creating a server</h2>
+  <p class="standfirst">Two objects and one open port.</p>
+
+  <span class="tag">Package installed</span>
+  <pre class="terminal">npm install express   <span class="c"># latest is express 5.2.1</span></pre>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">const</span> express = require('express');
+<span class="c">const</span> app = express();
+
+app.listen(process.env.PORT || 3005, () =&gt; {
+    console.log(`server running on port ${process.env.PORT}`);
+});</pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li><code>express()</code> creates the app object &mdash; a stack of middleware plus a router.</li>
+      <li><code>app.listen</code> binds the port and starts accepting TCP connections.</li>
+    </ul>
+  </div>
+
+  <div class="gotcha">
+    <div class="head">&#9888; Correction to an earlier note</div>
+    <p>The <code>app.listen</code> callback takes <b>no arguments</b> &mdash; not <code>(req, res)</code>. It
+    fires <b>once</b>, when the server starts listening, not per request. Writing <code>(req, res)</code>
+    there looks harmless but is misleading.</p>
+  </div>
+</section>
+
+<!-- ============================================================ 2 -->
+<section class="chapter" id="c2">
+  <h2><span class="badge">2</span> Versioning</h2>
+  <p class="standfirst">One extra routing layer buys you a v2 without rewriting v1.</p>
+
+  <span class="tag">Package installed</span>
+  <div class="block"><p>Nothing &mdash; plain express routing.</p></div>
+
+  <span class="tag">Important code</span>
+  <h4>Before &mdash; no version prefix</h4>
+  <pre><span class="c">const</span> TaskRoutes = require('./routes/task');
+
+app.use('/tasks', TaskRoutes);   <span class="c">// routes/task.js: router.get('/', getTasks)</span></pre>
+
+  <h4>After &mdash; with versioning</h4>
+  <pre><span class="c">// 1. create the prefix</span>
+<span class="c">const</span> V1_PREFIX = '/api/v1';
+
+<span class="c">// 2. point at the version's route file</span>
+<span class="c">const</span> v1Routes = require('./routes/v1');
+
+<span class="c">// 3. mount it</span>
+app.use(V1_PREFIX, v1Routes);</pre>
+  <pre><span class="c">// routes/v1.js — everything the v1 contract covers</span>
+router.use('/tasks', apiLimiter, TaskRoutes);
+router.use('/auth', authLimiter, AuthRoutes);</pre>
+
+  <figure>
+    <svg viewBox="0 0 820 260" role="img" aria-label="Routing layers from app.js to controllers">
+      <text class="tb" x="8" y="20">GET /api/v1/tasks/42</text>
+
+      <rect class="b" x="8" y="34" width="150" height="52" rx="4"></rect>
+      <text class="tb" x="30" y="58">app.js</text>
+      <text class="ts" x="20" y="76">mounts /api/v1</text>
+
+      <rect class="b" x="208" y="34" width="160" height="52" rx="4"></rect>
+      <text class="tb" x="232" y="58">routes/v1.js</text>
+      <text class="ts" x="222" y="76">+ rate limiters</text>
+
+      <rect class="b" x="418" y="10" width="170" height="46" rx="4"></rect>
+      <text class="tb" x="438" y="32">routes/task.js</text>
+      <text class="ts" x="438" y="48">router.use(protect)</text>
+
+      <rect class="b" x="418" y="76" width="170" height="46" rx="4"></rect>
+      <text class="tb" x="438" y="98">routes/auth.js</text>
+      <text class="ts" x="438" y="114">register / login</text>
+
+      <rect class="b" x="638" y="34" width="170" height="52" rx="4"></rect>
+      <text class="tb" x="660" y="58">controllers/</text>
+      <text class="ts" x="660" y="76">business logic</text>
+
+      <path class="ar" d="M158,60 H204"></path>
+      <path class="ar" d="M368,52 H414"></path>
+      <path class="ar" d="M368,76 H414"></path>
+      <path class="ar" d="M588,33 H616 V56 H634"></path>
+      <path class="ar" d="M588,99 H616 V66 H634"></path>
+
+      <rect class="b" x="8" y="150" width="800" height="94" rx="4" style="stroke-dasharray:6 4"></rect>
+      <text class="tb" x="24" y="176">Adding v2 later</text>
+      <text class="t" x="24" y="200">one new file routes/v2.js  +  one new line  app.use('/api/v2', v2Routes)</text>
+      <text class="ts" x="24" y="224">both versions run side by side while clients migrate — route files never write the prefix themselves</text>
+    </svg>
+    <figcaption>Fig. 2 &mdash; the version file is a shim between <code>app.js</code> and the old routers</figcaption>
+  </figure>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li><b>Before:</b> URL starts with <code>/tasks</code> &rarr; go to <code>TaskRoutes</code>, which
+        checks the rest of the path and picks a controller.</li>
+      <li><b>After:</b> URL starts with <code>/api/v1</code> &rarr; go to <code>routes/v1.js</code>, which
+        forwards to the same routers as before.</li>
+      <li>Route files never write the prefix themselves, so they stay reusable.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================ 3 -->
+<section class="chapter" id="c3">
+  <h2><span class="badge">3</span> Important middlewares</h2>
+  <p class="standfirst">Three lines that everybody copies, and what they actually do.</p>
+
+  <span class="tag">Package installed</span>
+  <div class="block"><p>Nothing &mdash; all three ship inside express.</p></div>
+
+  <figure>
+    <svg viewBox="0 0 820 470" role="img" aria-label="Middleware order inside app.js">
+      <text class="tb" x="8" y="18">REQUEST IN</text>
+      <path class="ar" d="M104,13 H144"></path>
+
+      <g>
+        <rect class="b" x="150" y="0" width="240" height="34" rx="4"></rect><text class="t" x="164" y="22">helmet() — safe headers</text>
+        <rect class="b" x="150" y="44" width="240" height="34" rx="4"></rect><text class="t" x="164" y="66">morgan() — request log</text>
+        <rect class="b" x="150" y="88" width="240" height="34" rx="4"></rect><text class="t" x="164" y="110">cors() — origin allowlist</text>
+        <rect class="hatch" x="150" y="132" width="240" height="34" rx="4"></rect>
+        <rect class="b" x="154" y="136" width="232" height="26" rx="3"></rect><text class="t" x="164" y="154">express.json()</text>
+        <rect class="b" x="150" y="176" width="240" height="34" rx="4"></rect><text class="t" x="164" y="198">express.urlencoded()</text>
+        <rect class="b" x="150" y="220" width="240" height="34" rx="4"></rect><text class="t" x="164" y="242">express.static('public')</text>
+        <rect class="b" x="150" y="264" width="240" height="34" rx="4"></rect><text class="t" x="164" y="286">GET /health</text>
+        <rect class="b" x="150" y="308" width="240" height="34" rx="4"></rect><text class="t" x="164" y="330">/api-docs (own CSP)</text>
+        <rect class="b" x="150" y="352" width="240" height="34" rx="4"></rect><text class="tb" x="164" y="374">app.use('/api/v1', v1Routes)</text>
+        <rect class="b" x="150" y="396" width="240" height="34" rx="4"></rect><text class="t" x="164" y="418">404 → next(AppError)</text>
+        <rect class="bk" x="150" y="436" width="240" height="34" rx="4"></rect><text class="tw" x="164" y="458">error handler (err,req,res,next)</text>
+      </g>
+
+      <path class="ar" d="M270,34 V40"></path><path class="ar" d="M270,78 V84"></path>
+      <path class="ar" d="M270,122 V128"></path><path class="ar" d="M270,166 V172"></path>
+      <path class="ar" d="M270,210 V216"></path><path class="ar" d="M270,254 V260"></path>
+      <path class="ar" d="M270,298 V304"></path><path class="ar" d="M270,342 V348"></path>
+      <path class="ar" d="M270,386 V392"></path><path class="ar" d="M270,430 V432"></path>
+
+      <text class="ts" x="404" y="22">first, so even 404s carry the headers</text>
+      <text class="ts" x="404" y="66">skips /health so polling is not logged</text>
+      <text class="ts" x="404" y="110">blocked origin → AppError 403</text>
+      <text class="ts" x="404" y="154">bytes → req.body  (100kb cap)</text>
+      <text class="ts" x="404" y="198">form bodies — unused fallback here</text>
+      <text class="ts" x="404" y="242">file found? send it and stop</text>
+      <text class="ts" x="404" y="286">unversioned, public, no limiter</text>
+      <text class="ts" x="404" y="330">inline script needs unsafe-inline</text>
+      <text class="ts" x="404" y="374">the real API — v1 contract</text>
+      <text class="ts" x="404" y="418">nothing matched the URL</text>
+      <text class="ts" x="404" y="458">every failure leaves through this one door</text>
+
+      <path class="ar-d" d="M660,406 C740,406 740,300 700,300 C660,300 660,455 646,455"></path>
+      <text class="ts" x="664" y="244">next(err) from</text>
+      <text class="ts" x="664" y="260">anywhere skips</text>
+      <text class="ts" x="664" y="276">the rest</text>
+    </svg>
+    <figcaption>Fig. 3 &mdash; order is the design: top to bottom, exactly as written in <code>app.js</code></figcaption>
+  </figure>
+
+  <h3>a. express.json()</h3>
+  <pre>app.use(express.json());</pre>
+  <p><b>What it does, in order:</b></p>
+  <ol>
+    <li>Checks whether the <code>Content-Type</code> is <code>application/json</code> &mdash; skips entirely if not</li>
+    <li>Collects the incoming chunks into a buffer, enforcing a size limit (<b>100kb</b> by default)</li>
+    <li>Runs <code>JSON.parse</code> on the result</li>
+    <li>Assigns the parsed object to <code>req.body</code></li>
+    <li>Calls <code>next()</code> so the route runs</li>
+  </ol>
+  <p>So <code>POST /api/v1/tasks</code> with <code>{"title":"Buy milk"}</code> arrives as bytes, and by the
+  time <code>createTask</code> runs, <code>req.body.title</code> is the string <code>"Buy milk"</code>.</p>
+  <p>Without the middleware <code>req.body</code> is <code>undefined</code>, and
+  <code>const { email, password } = req.body</code> throws a <code>TypeError</code> &mdash; a 500, not a
+  helpful 400. That is exactly why the auth controller reads <code>req.body ?? {}</code> and
+  <code>validateTaskBody</code> guards with <code>typeof body === 'object'</code>.</p>
+
+  <h4>Three consequences that show up in practice</h4>
+  <ul>
+    <li><b>The Content-Type check is a real gotcha.</b> If a client sends a JSON string but forgets or
+      mistypes the header, the middleware skips it and <code>req.body</code> stays
+      <code>undefined</code> &mdash; so you get validation errors saying fields are missing, even though you
+      can see them in the request. Nothing is broken; the parser never ran.</li>
+    <li><b>Bad JSON becomes an error, not a crash.</b> <code>JSON.parse</code> throws and the middleware
+      passes an error with <code>type: 'entity.parse.failed'</code> to <code>next()</code>. That is the case
+      <code>normaliseError</code> turns into <code>400 Malformed JSON in request body</code>.</li>
+    <li><b>The size limit is a security feature, not a nuisance.</b> Without a cap, someone posting a 2GB
+      body would have the server buffer it into memory. For uploads you raise it deliberately, or use
+      <code>multer</code>.</li>
+  </ul>
+  <blockquote><p>The name misleads: it only touches <b>incoming requests</b>. Turning a response into JSON is
+  <code>res.json()</code>. <b>Requests in, responses out.</b></p></blockquote>
+
+  <h3>b. express.urlencoded({ extended: true })</h3>
+  <pre>app.use(express.urlencoded({ extended: true }));</pre>
+  <p>Parses the body and puts the result on <code>req.body</code> &mdash; same job as
+  <code>express.json()</code> but for a different encoding.</p>
+
+  <h4>"Form data" is two different things</h4>
+  <table>
+    <tr><th>Encoding</th><th>Handled by</th><th>Used when</th></tr>
+    <tr><td><code>application/x-www-form-urlencoded</code></td><td>&#10003; <code>express.urlencoded()</code></td><td>a plain HTML <code>&lt;form&gt;</code> submits</td></tr>
+    <tr><td><code>multipart/form-data</code></td><td>&#10007; needs <b>multer</b></td><td>the form has a file input, or JS uses <code>FormData</code></td></tr>
+  </table>
+  <pre>title=Buy+milk&amp;status=pending          <span class="c">// the body looks like a query string</span></pre>
+
+  <h4>What extended: true changes</h4>
+  <ul>
+    <li><b>false</b> &rarr; Node's built-in <code>querystring</code>, flat key-value pairs only</li>
+    <li><b>true</b> &rarr; the <code>qs</code> library, which understands bracket notation</li>
+  </ul>
+  <pre>user[name]=Ashish&amp;tags[0]=work&amp;tags[1]=urgent
+→ { user: { name: 'Ashish' }, tags: ['work', 'urgent'] }</pre>
+
+  <div class="gotcha">
+    <div class="head">The trap &mdash; everything arrives as a string</div>
+    <p>There are no numbers, booleans or nulls in the wire format, so <code>completed=false</code> gives you
+    the <b>string</b> <code>"false"</code>, which is <b>truthy</b> in JavaScript. JSON does not have this
+    problem because it carries types. <code>readStringArray</code> would catch a non-array, but a boolean
+    check would silently pass.</p>
+  </div>
+  <p><b>Status in this project:</b> effectively dead weight &mdash; every client sends JSON, so
+  <code>express.json()</code> handles everything and <code>urlencoded</code> never fires. Harmless as a
+  fallback; relevant the day something submits a real HTML form.</p>
+
+  <h3>c. express.static('public')</h3>
+  <pre>app.use(express.static('public'));</pre>
+  <p>Unlike the last two, this has nothing to do with <code>req.body</code> &mdash; it <b>serves files from
+  disk</b> instead of running your code. For each request it checks whether a matching file exists inside
+  <code>public/</code>. If so it streams it back and stops. If not, it calls <code>next()</code> and the
+  request continues to your routes and eventually the 404 handler.</p>
+
+  <h4>The mapping &mdash; the folder name is NOT in the URL</h4>
+  <pre>public/index.html    →  GET /              <span class="c">(index.html is the directory default)</span>
+public/style.css     →  GET /style.css
+public/img/logo.png  →  GET /img/logo.png</pre>
+
+  <h4>What you get for free</h4>
+  <ul>
+    <li><code>Content-Type</code> inferred from the file extension</li>
+    <li><code>ETag</code> + <code>Last-Modified</code>, so repeat visits get <code>304 Not Modified</code></li>
+    <li><code>Range</code> support for video seeking</li>
+  </ul>
+
+  <div class="gotcha">
+    <div class="head">&#9888; A real bug in that line</div>
+    <p><code>'public'</code> resolves relative to <b><code>process.cwd()</code></b> &mdash; the directory you
+    launched from &mdash; not relative to <code>app.js</code>. Run <code>npm start</code> from the project
+    root and it works; run it from anywhere else and static serving silently stops. The same trap is already
+    avoided for the log file with <code>path.join(__dirname, 'logs')</code>.</p>
+    <pre>app.use(express.static(path.join(__dirname, 'public')));</pre>
+  </div>
+
+  <h4>Two things for later</h4>
+  <ul>
+    <li><b>Don't point static at an upload directory.</b> Serving user-uploaded files from your own origin
+      means an uploaded <code>.html</code> executes as a page on your domain &mdash; stored XSS. Uploads go
+      to S3 or a separate domain for exactly this reason.</li>
+    <li><b>In production, static assets usually don't come from Node at all.</b> nginx or a CDN serves them,
+      because file streaming would compete with the API for the event loop.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ 4 -->
+<section class="chapter" id="c4">
+  <h2><span class="badge">4</span> Database connection</h2>
+  <p class="standfirst">Connect once at startup &mdash; and notice that the <code>.then()</code> block grew later.</p>
+
+  <span class="tag">Package installed</span>
+  <pre class="terminal">npm install mongoose</pre>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">const</span> mongoose = require('mongoose');
+
+mongoose.connect(process.env.DB_CONNECTION)
+    .then(<span class="c">async</span> () =&gt; {
+        console.log('Connected to database');
+
+        <span class="c">const</span> User = require('./models/user');
+        <span class="c">try</span> {
+            <span class="c">await</span> User.syncIndexes();   <span class="c">// builds the unique email index</span>
+            console.log('User indexes synced (unique email)');
+        } <span class="c">catch</span> (err) {
+            console.error('User index sync failed — remove duplicate emails first:', err.message);
+        }
+    })
+    .catch((err) =&gt; console.error('Database connection error:', err.message));</pre>
+  <pre>DB_CONNECTION looks like mongodb://localhost:27017/todo-app</pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li>The original version was just <code>connect().then(log).catch(log)</code>. The
+        <code>syncIndexes()</code> part was <b>added later</b>, with the unique-email work &mdash; it is not
+        part of connecting.</li>
+      <li><code>unique: true</code> in a schema is only an instruction. The index has to be built in MongoDB,
+        and it fails if duplicate emails already exist. <code>syncIndexes()</code> runs at startup so that
+        failure is printed once, loudly, instead of surfacing as a random duplicate later.</li>
+      <li>Connecting is asynchronous and <code>app.listen</code> does not wait for it. That is what
+        <code>/health</code> is for &mdash; see chapter 14.</li>
+    </ul>
+    <pre>mongoose.connection.readyState → 0 disconnected · 1 connected · 2 connecting · 3 disconnecting</pre>
+  </div>
+</section>
+
+<!-- ============================================================ 5 -->
+<section class="chapter" id="c5">
+  <h2><span class="badge">5</span> Simple API</h2>
+  <p class="standfirst">No auth, no limiter &mdash; route, controller, model.</p>
+
+  <span class="tag">Package installed</span>
+  <div class="block"><p>Nothing new &mdash; express + mongoose.</p></div>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">// routes/task.js</span>
+router.get('/', getTasks);</pre>
+  <pre><span class="c">// controllers/task.js</span>
+exports.getTasks = <span class="c">async</span> (req, res, next) =&gt; {
+    <span class="c">const</span> tasks = <span class="c">await</span> Task.find(filter).sort(sort);
+    res.json(tasks);
+};</pre>
+  <pre><span class="c">// models/task.js</span>
+<span class="c">const</span> TaskSchema = mongoose.Schema({ <span class="c">/* fields */</span> }, { timestamps: <span class="c">true</span> });
+module.exports = mongoose.model('Task', TaskSchema);</pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li>Route <code>/api/v1/tasks</code> &rarr; <code>getTasks</code> controller.</li>
+      <li>The route only maps a URL. The controller holds the business logic, talks to the database and sends
+        the response.</li>
+      <li>Before touching the database you need a model (<code>mongoose.Schema</code>). Mongoose provides the
+        query methods &mdash; here <code>Task.find</code>.</li>
+      <li>Mongoose turns the model name <code>'Task'</code> into the collection <code>tasks</code>
+        (lowercased and pluralised).</li>
+      <li><code>{ timestamps: true }</code> gives <code>createdAt</code> and <code>updatedAt</code> for free.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================ 6 -->
+<section class="chapter" id="c6">
+  <h2><span class="badge">6</span> Auth &amp; authorization</h2>
+  <p class="standfirst">bcrypt hides the password, JWT carries the identity, <code>protect</code> enforces it.</p>
+
+  <span class="tag">Package installed</span>
+  <pre class="terminal">npm install jsonwebtoken
+npm install bcryptjs</pre>
+
+  <figure>
+    <svg viewBox="0 0 820 400" role="img" aria-label="Register, login and protected request flow">
+      <text class="tb" x="8" y="18">A · REGISTER</text>
+      <rect class="b" x="8" y="30" width="120" height="44" rx="4"></rect><text class="t" x="34" y="58">client</text>
+      <rect class="b" x="178" y="30" width="150" height="44" rx="4"></rect><text class="t" x="192" y="52">controller</text><text class="ts" x="192" y="68">User.findOne → create</text>
+      <rect class="b" x="378" y="30" width="180" height="44" rx="4"></rect><text class="t" x="392" y="52">pre('save') hook</text><text class="ts" x="392" y="68">bcrypt.hash(password, salt)</text>
+      <rect class="b" x="608" y="30" width="150" height="44" rx="4"></rect><text class="t" x="622" y="52">MongoDB</text><text class="ts" x="622" y="68">_id + hash stored</text>
+      <path class="ar" d="M128,52 H174"></path><path class="ar" d="M328,52 H374"></path><path class="ar" d="M558,52 H604"></path>
+      <text class="ts" x="132" y="26">email + password</text>
+
+      <line class="gl" x1="8" y1="98" x2="812" y2="98"></line>
+
+      <text class="tb" x="8" y="128">B · LOGIN</text>
+      <rect class="b" x="8" y="140" width="120" height="44" rx="4"></rect><text class="t" x="34" y="168">client</text>
+      <rect class="b" x="178" y="140" width="150" height="44" rx="4"></rect><text class="t" x="192" y="162">User.findOne</text><text class="ts" x="192" y="178">bcrypt.compare</text>
+      <rect class="b" x="378" y="140" width="180" height="44" rx="4"></rect><text class="t" x="392" y="162">jwt.sign</text><text class="ts" x="392" y="178">{ userId: user._id }</text>
+      <rect class="bk" x="608" y="140" width="150" height="44" rx="4"></rect><text class="tw" x="622" y="168">token</text>
+      <path class="ar" d="M128,162 H174"></path><path class="ar" d="M328,162 H374"></path><path class="ar" d="M558,162 H604"></path>
+      <text class="ts" x="392" y="204">signed with JWT_SECRET · expiresIn 7d</text>
+
+      <line class="gl" x1="8" y1="228" x2="812" y2="228"></line>
+
+      <text class="tb" x="8" y="258">C · PROTECTED REQUEST</text>
+      <rect class="b" x="8" y="270" width="130" height="52" rx="4"></rect><text class="t" x="22" y="292">client</text><text class="ts" x="22" y="310">Bearer &lt;token&gt;</text>
+      <rect class="b" x="188" y="270" width="170" height="52" rx="4"></rect><text class="t" x="202" y="292">protect middleware</text><text class="ts" x="202" y="310">jwt.verify(token, SECRET)</text>
+      <rect class="b" x="408" y="270" width="170" height="52" rx="4"></rect><text class="t" x="422" y="292">User.findById</text><text class="ts" x="422" y="310">.select('-password')</text>
+      <rect class="b" x="628" y="270" width="180" height="52" rx="4"></rect><text class="tb" x="642" y="292">req.user = user</text><text class="ts" x="642" y="310">trust boundary</text>
+      <path class="ar" d="M138,296 H184"></path><path class="ar" d="M358,296 H404"></path><path class="ar" d="M578,296 H624"></path>
+
+      <rect class="b" x="188" y="344" width="290" height="42" rx="4" style="stroke-dasharray:6 4"></rect>
+      <text class="t" x="202" y="370">bad / expired token → AppError 401</text>
+      <path class="ar-d" d="M273,322 V340"></path>
+
+      <rect class="b" x="518" y="344" width="290" height="42" rx="4"></rect>
+      <text class="t" x="532" y="370">controller: { userId: req.user._id }</text>
+      <path class="ar" d="M718,322 V340"></path>
+    </svg>
+    <figcaption>Fig. 6 &mdash; the id created at register time is the id the token carries back</figcaption>
+  </figure>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">// routes/auth.js</span>
+router.post('/register', register);
+router.post('/login', login);</pre>
+  <pre><span class="c">// models/user.js — hash before the document is written</span>
+UserSchema.pre('save', <span class="c">async function</span> () {
+    <span class="c">if</span> (!<span class="c">this</span>.isModified('password')) <span class="c">return</span>;
+
+    <span class="c">const</span> salt = <span class="c">await</span> bcrypt.genSalt(10);
+    <span class="c">this</span>.password = <span class="c">await</span> bcrypt.hash(<span class="c">this</span>.password, salt);
+});</pre>
+  <pre><span class="c">// controllers/auth.js — login</span>
+<span class="c">const</span> match = <span class="c">await</span> bcrypt.compare(password, user.password);
+
+<span class="c">const</span> token = jwt.sign(
+    { userId: user._id },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+);</pre>
+  <pre><span class="c">// routes/task.js — every task route is protected</span>
+<span class="c">const</span> { protect } = require('../middleware/auth');
+router.use(protect);</pre>
+  <pre><span class="c">// middleware/auth.js</span>
+<span class="c">const</span> token = req.headers.authorization.split(' ')[1];   <span class="c">// "Bearer xxx"</span>
+
+decoded = jwt.verify(token, process.env.JWT_SECRET);
+<span class="c">// { userId: '6a7b...', iat: 1786455087, exp: 1787059887 }</span>
+
+<span class="c">const</span> user = <span class="c">await</span> User.findById(decoded.userId).select('-password');
+req.user = user;   <span class="c">// hands identity to every controller</span>
+next();</pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <h4>Register</h4>
+    <ul>
+      <li>Check whether the email already exists (<code>User.findOne</code>) &mdash; business logic. If not,
+        store it (<code>User.create</code>).</li>
+      <li>The password is never stored raw. The <code>pre('save')</code> hook hashes it, so the controller
+        never calls bcrypt itself.</li>
+      <li><code>isModified('password')</code> stops a second save (say, changing the role) from hashing the
+        already-hashed value again.</li>
+    </ul>
+    <h4>Login</h4>
+    <ul>
+      <li><code>User.findOne</code> by email, then <code>bcrypt.compare(plain, hash)</code>.</li>
+      <li>MongoDB created <code>_id</code> at register time; login puts that <code>_id</code> inside the
+        token. So decoding the token gives the user id back.</li>
+    </ul>
+    <h4>Protect (authorization)</h4>
+    <ul>
+      <li><code>jwt.verify</code> checks the signature against <code>JWT_SECRET</code> and the expiry. A
+        tampered or expired token fails here &rarr; <code>401</code>.</li>
+      <li>Verify only proves the token is genuine. <code>User.findById</code> then confirms the account still
+        exists, and <code>select('-password')</code> keeps the hash out of memory.</li>
+      <li><code>req.user = user</code> is the trust boundary: from here on controllers use
+        <code>req.user._id</code> and never trust an id from the body or query.</li>
+      <li>That is why ownership works &mdash; every task query is scoped with
+        <code>{ userId: req.user._id }</code>, so one user can never read another's tasks.</li>
+    </ul>
+  </div>
+
+  <blockquote><p>Anyone holding the token <i>is</i> that user &mdash; a bearer token. Keep
+  <code>JWT_SECRET</code> long and secret, and keep expiry short.</p></blockquote>
+</section>
+
+<!-- ============================================================ 7 -->
+<section class="chapter" id="c7">
+  <h2><span class="badge">7</span> CORS</h2>
+  <p class="standfirst">A browser rule. The server only declares who is allowed.</p>
+
+  <span class="tag">Package installed</span>
+  <pre class="terminal">npm install cors</pre>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">const</span> allowedOrigins = process.env.NODE_ENV === 'production'
+    ? parseOrigins(process.env.CORS_ORIGIN)
+    : parseOrigins(process.env.CORS_ORIGIN_DEV);
+
+app.use(cors({
+    origin(origin, callback) {
+        <span class="c">// Postman, curl, server-to-server — no Origin header</span>
+        <span class="c">if</span> (!origin || allowedOrigins.includes(origin)) {
+            callback(<span class="c">null</span>, <span class="c">true</span>);
+        } <span class="c">else</span> {
+            callback(<span class="c">new</span> AppError('Not allowed by CORS', 403));
+        }
+    },
+    credentials: <span class="c">true</span>,
+    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+}));</pre>
+
+  <figure>
+    <svg viewBox="0 0 820 250" role="img" aria-label="CORS origin decision">
+      <rect class="b" x="8" y="60" width="150" height="60" rx="4"></rect>
+      <text class="t" x="22" y="84">incoming request</text><text class="ts" x="22" y="102">Origin: ?</text>
+
+      <path class="b" d="M250,90 L330,50 L410,90 L330,130 Z"></path>
+      <text class="ts" x="288" y="86">no Origin</text><text class="ts" x="298" y="102">header?</text>
+      <path class="ar" d="M158,90 H246"></path>
+
+      <path class="b" d="M480,90 L560,50 L640,90 L560,130 Z"></path>
+      <text class="ts" x="512" y="86">in allowlist</text><text class="ts" x="522" y="102">from .env?</text>
+      <path class="ar" d="M410,90 H476"></path>
+      <text class="ts" x="418" y="82">no</text>
+
+      <rect class="b" x="690" y="24" width="120" height="46" rx="4"></rect>
+      <text class="t" x="704" y="46">allowed</text><text class="ts" x="704" y="62">callback(null,true)</text>
+      <rect class="bk" x="690" y="112" width="120" height="46" rx="4"></rect>
+      <text class="tw" x="704" y="134">blocked</text><text class="tsw" x="704" y="150">AppError 403</text>
+
+      <path class="ar" d="M330,50 V30 H686"></path>
+      <text class="ts" x="340" y="24">yes — curl / Postman</text>
+      <path class="ar" d="M640,90 H664 V47 H686"></path>
+      <text class="ts" x="600" y="40">yes</text>
+      <path class="ar" d="M560,130 V152 H670 V135 H686"></path>
+      <text class="ts" x="566" y="148">no</text>
+
+      <rect class="b" x="8" y="180" width="802" height="60" rx="4" style="stroke-dasharray:6 4"></rect>
+      <text class="tb" x="24" y="204">preflight (OPTIONS)</text>
+      <text class="ts" x="24" y="226">browser asks first → methods + allowedHeaders answer it · Authorization must be listed or every logged-in call fails</text>
+    </svg>
+    <figcaption>Fig. 7 &mdash; one callback per request, two ways to pass, one way to fail</figcaption>
+  </figure>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li>CORS is a <b>browser</b> rule. The server just declares who is allowed; curl and Postman ignore all
+        of it.</li>
+      <li><code>origin</code> as a function runs per request. <code>origin</code> is the site the request came
+        from, checked against the allowlist from <code>.env</code>.</li>
+      <li><code>!origin</code> is allowed because non-browser clients send no <code>Origin</code> header at
+        all.</li>
+      <li>Failing with <code>AppError('Not allowed by CORS', 403)</code> instead of a plain
+        <code>Error</code> means the global handler treats it as an expected error and returns a clean 403,
+        rather than logging it as a server bug and returning 500.</li>
+      <li><code>credentials: true</code> allows cookies / auth headers on cross-origin calls. It cannot be
+        combined with <code>origin: '*'</code> &mdash; another reason for the allowlist.</li>
+      <li><code>methods</code> and <code>allowedHeaders</code> answer the <b>preflight</b>
+        <code>OPTIONS</code> request.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================ 8 -->
+<section class="chapter" id="c8">
+  <h2><span class="badge">8</span> Safe headers</h2>
+  <p class="standfirst">One line, about a dozen headers, all aimed at the browser.</p>
+
+  <span class="tag">Package installed</span>
+  <pre class="terminal">npm install helmet</pre>
+
+  <span class="tag">Important code</span>
+  <pre>app.use(helmet());   <span class="c">// first middleware, so even 404s and errors carry the headers</span></pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <p>Helmet sets a group of response headers that tell the browser to behave defensively.</p>
+    <pre>X-Content-Type-Options: nosniff        don't guess a file's type
+X-Frame-Options: DENY                  can't be iframed → no clickjacking
+Content-Security-Policy                what the page may load / execute
+Strict-Transport-Security (HSTS)       HTTPS only, remembered by the browser
+X-Powered-By removed                   stop advertising express
+Referrer-Policy                        don't leak URLs to other sites</pre>
+    <ul>
+      <li>They protect the <b>browser</b>, not the database. A JSON API still needs auth, validation and rate
+        limiting.</li>
+      <li>Mounted first on purpose, so error responses and 404s get the headers too.</li>
+      <li>CSP is the strict one, and it breaks pages that use inline scripts &mdash; which is exactly what
+        happens with Swagger UI (chapter 12).</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================ 9 -->
+<section class="chapter" id="c9">
+  <h2><span class="badge">9</span> Error handling</h2>
+  <p class="standfirst">Two kinds of error, one class, one exit door.</p>
+
+  <span class="tag">Package installed</span>
+  <div class="block"><p>Nothing &mdash; express has an error lane built in.</p></div>
+
+  <figure>
+    <svg viewBox="0 0 820 320" role="img" aria-label="Normal lane and error lane in Express">
+      <text class="tb" x="8" y="18">NORMAL LANE</text>
+      <rect class="b" x="8" y="30" width="130" height="44" rx="4"></rect><text class="t" x="32" y="58">middleware</text>
+      <rect class="b" x="178" y="30" width="130" height="44" rx="4"></rect><text class="t" x="204" y="58">validation</text>
+      <rect class="b" x="348" y="30" width="130" height="44" rx="4"></rect><text class="t" x="374" y="58">controller</text>
+      <rect class="b" x="518" y="30" width="130" height="44" rx="4"></rect><text class="t" x="548" y="58">mongoose</text>
+      <rect class="b" x="688" y="30" width="124" height="44" rx="4"></rect><text class="t" x="712" y="58">res.json</text>
+      <path class="ar" d="M138,52 H174"></path><path class="ar" d="M308,52 H344"></path>
+      <path class="ar" d="M478,52 H514"></path><path class="ar" d="M648,52 H684"></path>
+
+      <path class="ar-d" d="M73,74 V150"></path><path class="ar-d" d="M243,74 V150"></path>
+      <path class="ar-d" d="M413,74 V150"></path><path class="ar-d" d="M583,74 V150"></path>
+      <text class="ts" x="80" y="118">next(err)</text>
+      <text class="ts" x="250" y="118">next(AppError 400)</text>
+      <text class="ts" x="420" y="118">throw AppError 404</text>
+      <text class="ts" x="590" y="118">ValidationError</text>
+
+      <rect class="b" x="8" y="156" width="804" height="52" rx="4"></rect>
+      <text class="tb" x="24" y="180">normaliseError(err)</text>
+      <text class="ts" x="24" y="198">AppError → as is · ValidationError → 400 · CastError → 400 · code 11000 → 409 · entity.parse.failed → 400 · anything else → bug</text>
+
+      <rect class="bk" x="8" y="228" width="390" height="80" rx="4"></rect>
+      <text class="tw" x="24" y="254">OPERATIONAL — isOperational</text>
+      <text class="tsw" x="24" y="274">real status code + readable message</text>
+      <text class="tsw" x="24" y="294">{ success:false, status:404, message:'Task not found' }</text>
+
+      <rect class="b" x="422" y="228" width="390" height="80" rx="4"></rect>
+      <text class="tb" x="438" y="254">PROGRAMMING — a bug</text>
+      <text class="ts" x="438" y="274">console.error(full stack) on the server</text>
+      <text class="ts" x="438" y="294">client gets only 500 "Something went wrong"</text>
+
+      <path class="ar" d="M203,208 V224"></path>
+      <path class="ar" d="M617,208 V224"></path>
+    </svg>
+    <figcaption>Fig. 9 &mdash; <code>next(err)</code> skips every remaining normal middleware</figcaption>
+  </figure>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">// utils/AppError.js</span>
+<span class="c">class</span> AppError <span class="c">extends</span> Error {
+    constructor(message, statusCode, errors = []) {
+        <span class="c">super</span>(message);
+
+        <span class="c">this</span>.statusCode = statusCode;
+        <span class="c">this</span>.errors = errors;
+        <span class="c">this</span>.isOperational = <span class="c">true</span>;
+
+        <span class="c">// drop the constructor call from the stack so it points at the throw site</span>
+        Error.captureStackTrace(<span class="c">this</span>, <span class="c">this</span>.constructor);
+    }
+}
+
+module.exports = AppError;</pre>
+  <pre><span class="c">// app.js — 404, after every real route</span>
+app.use((req, res, next) =&gt; {
+    next(<span class="c">new</span> AppError(`Route not found: ${req.method} ${req.originalUrl}`, 404));
+});</pre>
+  <pre><span class="c">// app.js — turn known library errors into AppError. Anything else is a bug.</span>
+<span class="c">const</span> normaliseError = (err) =&gt; {
+    <span class="c">if</span> (err <span class="c">instanceof</span> AppError) <span class="c">return</span> err;
+
+    <span class="c">if</span> (err.name === 'ValidationError') { <span class="c">/* mongoose → 400 per field */</span> }
+    <span class="c">if</span> (err.name === 'CastError')       { <span class="c">/* bad ObjectId → 400 */</span> }
+    <span class="c">if</span> (err.code === 11000)             { <span class="c">/* duplicate key → 409 */</span> }
+    <span class="c">if</span> (err.type === 'entity.parse.failed') { <span class="c">/* bad JSON → 400 */</span> }
+
+    <span class="c">return</span> err;   <span class="c">// unknown → programming error</span>
+};</pre>
+  <pre><span class="c">// app.js — global handler. 4 parameters is what makes it an error handler.</span>
+app.use((err, req, res, next) =&gt; {
+    <span class="c">const</span> error = normaliseError(err);
+    <span class="c">const</span> isKnown = error <span class="c">instanceof</span> AppError;
+
+    <span class="c">if</span> (!isKnown) console.error('Unhandled error ===&gt;', error);   <span class="c">// bug: log everything</span>
+
+    res.status(isKnown ? error.statusCode : 500).json({
+        success: <span class="c">false</span>,
+        status: isKnown ? error.statusCode : 500,
+        message: isKnown ? error.message : 'Something went wrong'
+    });
+});</pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <p>There are two kinds of error in Node:</p>
+    <ul>
+      <li><b>Operational errors</b> &mdash; expected, part of normal life: task not found, bad input, wrong
+        password, rate limit hit. These get a real status code and a message the client can read. Every one of
+        them is an <code>AppError</code>.</li>
+      <li><b>Programming errors</b> &mdash; bugs: a typo, a missing <code>await</code>, calling a method on
+        <code>undefined</code>. The client gets a generic <code>500 Something went wrong</code>, and the full
+        error goes to the server log. Leaking the message would leak file paths, queries and internals.</li>
+    </ul>
+    <p>How an error reaches the handler:</p>
+    <ul>
+      <li><code>throw new AppError(...)</code> inside an async controller, or <code>next(err)</code>.</li>
+      <li><code>next(err)</code> <b>skips all remaining normal middleware</b> and jumps straight to the error
+        lane.</li>
+      <li>Express recognises an error handler purely by its <b>4 parameters</b>
+        <code>(err, req, res, next)</code>. Write 3 and it is treated as normal middleware and never sees
+        errors.</li>
+      <li>The error handler must be mounted <b>last</b>, after the routes and the 404.</li>
+      <li><code>try/catch</code> is still useful &mdash; not to keep the app alive, but to <i>translate</i>:
+        catch a bcrypt or mongoose failure and rethrow it as an <code>AppError</code> with the right
+        status.</li>
+    </ul>
+    <p>Result: every failure in the app leaves through one door, in one shape.</p>
+    <pre>{ "success": false, "status": 404, "message": "Task not found" }</pre>
+  </div>
+</section>
+
+<!-- ============================================================ 10 -->
+<section class="chapter" id="c10">
+  <h2><span class="badge">10</span> MVC &amp; folders</h2>
+  <p class="standfirst">Each folder answers exactly one question.</p>
+
+  <span class="tag">Package installed</span>
+  <div class="block"><p>Nothing &mdash; a convention, not a library.</p></div>
+
+  <span class="tag">Important code</span>
+  <pre>todo_api/
+├── app.js                     <span class="c">entry point: middleware chain, mounts /api/v1, error handler</span>
+├── package.json
+├── .env / .env.example        <span class="c">secrets and config (PORT, DB_CONNECTION, JWT_SECRET, CORS_ORIGIN)</span>
+│
+├── models/                    <span class="c">M — schema + database shape</span>
+│   ├── user.js                <span class="c">userSchema, pre('save') password hashing</span>
+│   └── task.js                <span class="c">taskSchema, owner ref to User</span>
+│
+├── controllers/               <span class="c">C — business logic, talks to models, sends response</span>
+│   ├── auth.js                <span class="c">register, login (bcrypt + jwt.sign)</span>
+│   └── task.js                <span class="c">getTasks, createTask, updateTask, deleteTask</span>
+│
+├── routes/                    <span class="c">URL → controller mapping</span>
+│   ├── v1.js                  <span class="c">/tasks and /auth mounted here with rate limiters</span>
+│   ├── auth.js                <span class="c">router.post('/register'), router.post('/login')</span>
+│   └── task.js                <span class="c">router.use(protect) then task CRUD routes</span>
+│
+├── middleware/                <span class="c">runs between route and controller</span>
+│   ├── auth.js                <span class="c">protect — jwt.verify, loads req.user</span>
+│   ├── rateLimit.js           <span class="c">apiLimiter, authLimiter</span>
+│   └── validateObjectId.js    <span class="c">rejects bad :id before hitting mongo</span>
+│
+├── utils/
+│   └── AppError.js            <span class="c">custom operational error class</span>
+│
+├── docs/
+│   └── swagger.js             <span class="c">OpenAPI spec, served at /api-docs</span>
+│
+├── public/                    <span class="c">V — static files served by express.static</span>
+│   └── index.html
+│
+└── logs/
+    └── access.log             <span class="c">morgan request log</span></pre>
+
+  <figure>
+    <svg viewBox="0 0 820 250" role="img" aria-label="MVC layers and request flow">
+      <rect class="b" x="20" y="20" width="220" height="86" rx="4"></rect>
+      <text class="tb" x="36" y="46">MODEL — models/</text>
+      <text class="ts" x="36" y="68">schema, validation, defaults</text>
+      <text class="ts" x="36" y="88">never sees req or res</text>
+
+      <rect class="b" x="300" y="20" width="220" height="86" rx="4"></rect>
+      <text class="tb" x="316" y="46">CONTROLLER</text>
+      <text class="ts" x="316" y="68">the only business logic</text>
+      <text class="ts" x="316" y="88">reads req.user, writes res</text>
+
+      <rect class="b" x="580" y="20" width="220" height="86" rx="4"></rect>
+      <text class="tb" x="596" y="46">VIEW — JSON</text>
+      <text class="ts" x="596" y="68">an API has no template</text>
+      <text class="ts" x="596" y="88">public/ for static files</text>
+
+      <path class="ar" d="M300,50 H244"></path>
+      <path class="ar" d="M240,80 H296"></path>
+      <path class="ar" d="M520,63 H576"></path>
+
+      <rect class="b" x="20" y="132" width="780" height="62" rx="4" style="stroke-dasharray:6 4"></rect>
+      <text class="m" x="36" y="156">app.js → /api/v1 → routes/v1.js → routes/task.js → protect</text>
+      <text class="m" x="36" y="180">     → controllers/task.js → models/task.js → mongo → JSON response</text>
+
+      <text class="ts" x="20" y="218">route file answers "which URL"  ·  controller answers "what to do"  ·  model answers "how data looks"</text>
+      <text class="ts" x="20" y="238">a change in one layer does not touch the others — and every layer's errors land in the one handler in app.js</text>
+    </svg>
+    <figcaption>Fig. 10 &mdash; the View is the JSON response, so MVC has only two folders here</figcaption>
+  </figure>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li><b>Model</b> &rarr; <code>models/</code> only knows data and validation, no <code>req</code>/<code>res</code>.</li>
+      <li><b>Controller</b> &rarr; <code>controllers/</code> the only place with business logic.</li>
+      <li><b>View</b> &rarr; the JSON response (and <code>public/</code> for static files).</li>
+      <li><code>docs/</code>, <code>utils/</code> and <code>logs/</code> sit outside MVC &mdash; supporting
+        concerns, not layers.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================ 11 -->
+<section class="chapter" id="c11">
+  <h2><span class="badge">11</span> Rate limiting</h2>
+  <p class="standfirst">Five algorithms exist. This project uses the simplest one, on purpose.</p>
+
+  <span class="tag">Package installed</span>
+  <pre class="terminal">npm install express-rate-limit</pre>
+
+  <span class="tag">Important code</span>
+  <p>Applied inside the version file <code>routes/v1.js</code>:</p>
+  <pre>router.use('/tasks', apiLimiter, TaskRoutes);
+router.use('/auth', authLimiter, AuthRoutes);</pre>
+  <pre><span class="c">// middleware/rateLimit.js</span>
+<span class="c">const</span> jsonLimitHandler = (req, res, next) =&gt; {
+    next(<span class="c">new</span> AppError('Too many requests, please try again later', 429));
+};
+
+exports.apiLimiter = rateLimit({
+    windowMs,                                          <span class="c">// 15 min block</span>
+    max: Number(process.env.RATE_LIMIT_MAX) || 10,     <span class="c">// 10 requests per IP</span>
+    standardHeaders: <span class="c">true</span>,                             <span class="c">// RateLimit-* headers</span>
+    legacyHeaders: <span class="c">false</span>,                              <span class="c">// drop old X-RateLimit-*</span>
+    handler: jsonLimitHandler,                         <span class="c">// our 429 AppError</span>
+});</pre>
+  <p>The limiter sits <b>before</b> the router, so a blocked request never reaches the controller or the
+  database.</p>
+
+  <span class="tag">Logic</span>
+
+  <h3>The five algorithms</h3>
+  <p>For all five, the rule is the same: <b>10 requests per 15 minutes</b>, windows running 15:00&ndash;15:15,
+  15:15&ndash;15:30 and so on. Token bucket and leaky bucket are <b>not</b> the same idea flipped &mdash;
+  one bursts, one never does.</p>
+
+  <figure>
+    <svg viewBox="0 0 820 640" role="img" aria-label="Five rate limiting algorithms compared">
+      <!-- 1 fixed window -->
+      <text class="tb" x="8" y="16">1 · FIXED WINDOW — one counter per clock block, reset at the edge</text>
+      <text class="ts" x="10" y="36">14:45</text><text class="ts" x="352" y="36">15:00</text><text class="ts" x="646" y="36">15:15</text>
+      <line class="gl" x1="8" y1="63" x2="680" y2="63"></line>
+      <rect class="b" x="8" y="42" width="336" height="42" rx="3"></rect>
+      <rect class="b" x="348" y="42" width="332" height="42" rx="3"></rect>
+      <g>
+        <circle class="bk" cx="246" cy="63" r="5"></circle><circle class="bk" cx="260" cy="63" r="5"></circle>
+        <circle class="bk" cx="274" cy="63" r="5"></circle><circle class="bk" cx="288" cy="63" r="5"></circle>
+        <circle class="bk" cx="302" cy="63" r="5"></circle><circle class="bk" cx="316" cy="63" r="5"></circle>
+        <circle class="bk" cx="360" cy="63" r="5"></circle><circle class="bk" cx="374" cy="63" r="5"></circle>
+        <circle class="bk" cx="388" cy="63" r="5"></circle><circle class="bk" cx="402" cy="63" r="5"></circle>
+        <circle class="bk" cx="416" cy="63" r="5"></circle><circle class="bk" cx="430" cy="63" r="5"></circle>
+      </g>
+      <text class="ts" x="692" y="60">the edge burst →</text>
+      <text class="ts" x="8" y="104">10 requests at 14:59 plus 10 at 15:00 = 20 in one minute, and the rule said 10 per 15 min</text>
+
+      <!-- 2 sliding log -->
+      <text class="tb" x="8" y="140">2 · SLIDING WINDOW LOG — keep every timestamp, drop the old ones</text>
+      <text class="ts" x="186" y="162">window slides with "now"</text>
+      <line class="gl" x1="100" y1="190" x2="524" y2="190"></line>
+      <rect class="b" x="180" y="168" width="340" height="44" rx="3" style="stroke-dasharray:6 4"></rect>
+      <g>
+        <circle class="bk" cx="200" cy="190" r="5"></circle><circle class="bk" cx="230" cy="190" r="5"></circle>
+        <circle class="bk" cx="270" cy="190" r="5"></circle><circle class="bk" cx="330" cy="190" r="5"></circle>
+        <circle class="bk" cx="380" cy="190" r="5"></circle><circle class="bk" cx="450" cy="190" r="5"></circle>
+      </g>
+      <circle class="b" cx="120" cy="190" r="5"></circle><circle class="b" cx="150" cy="190" r="5"></circle>
+      <text class="ts" x="104" y="216">dropped</text>
+      <text class="ts" x="548" y="182">exact count → never lets 20 through</text>
+      <text class="ts" x="548" y="202">5000 requests = 5000 timestamps</text>
+
+      <!-- 3 sliding counter -->
+      <text class="tb" x="8" y="256">3 · SLIDING WINDOW COUNTER — weight the previous window</text>
+      <text class="ts" x="258" y="278">80% overlap</text>
+      <rect class="b" x="8" y="284" width="240" height="48" rx="3"></rect>
+      <text class="ts" x="20" y="304">previous window</text><text class="m" x="20" y="324">10 requests</text>
+      <rect class="hatch" x="256" y="284" width="130" height="48" rx="3"></rect>
+      <rect class="b" x="394" y="284" width="240" height="48" rx="3"></rect>
+      <text class="ts" x="406" y="304">current window</text><text class="m" x="406" y="324">2 so far</text>
+      <text class="ts" x="644" y="304">10×0.8 + 2 = 10 → blocked</text>
+      <text class="ts" x="644" y="324">at 15:14 → 2.6 → allowed</text>
+
+      <!-- 4 token bucket -->
+      <text class="tb" x="8" y="372">4 · TOKEN BUCKET — burst allowed, average still capped</text>
+      <path class="ar" d="M80,384 V404"></path>
+      <text class="ts" x="92" y="398">refill 1 token / 90s</text>
+      <path class="b" d="M40,408 L120,408 L110,478 L50,478 Z"></path>
+      <g>
+        <circle class="bk" cx="66" cy="464" r="5"></circle><circle class="bk" cx="80" cy="464" r="5"></circle>
+        <circle class="bk" cx="94" cy="464" r="5"></circle><circle class="bk" cx="73" cy="450" r="5"></circle>
+        <circle class="bk" cx="87" cy="450" r="5"></circle>
+      </g>
+      <path class="ar" d="M124,443 H190"></path>
+      <text class="ts" x="128" y="412">1 token per request</text>
+      <rect class="b" x="200" y="420" width="180" height="48" rx="3"></rect>
+      <text class="ts" x="212" y="440">tokens left → allowed</text>
+      <text class="ts" x="212" y="460">bucket empty → 429</text>
+      <text class="ts" x="400" y="428">10 fired at once → all pass, bucket empty</text>
+      <text class="ts" x="400" y="448">idle 15 min → refilled → burst allowed again</text>
+      <text class="ts" x="400" y="468">what most public APIs use</text>
+
+      <!-- 5 leaky bucket -->
+      <text class="tb" x="8" y="500">5 · LEAKY BUCKET — queue in, drip out. no burst on the way out</text>
+      <g>
+        <circle class="bk" cx="48" cy="516" r="4"></circle><circle class="bk" cx="62" cy="516" r="4"></circle>
+        <circle class="bk" cx="76" cy="516" r="4"></circle><circle class="bk" cx="90" cy="516" r="4"></circle>
+        <circle class="bk" cx="104" cy="516" r="4"></circle>
+      </g>
+      <text class="ts" x="120" y="520">10 arrive at once</text>
+      <path class="b" d="M40,528 L120,528 L110,598 L50,598 Z"></path>
+      <g>
+        <circle class="bk" cx="70" cy="584" r="5"></circle>
+        <circle class="bk" cx="84" cy="584" r="5"></circle>
+        <circle class="bk" cx="77" cy="568" r="5"></circle>
+        <circle class="bk" cx="91" cy="568" r="5"></circle>
+      </g>
+      <line class="gl" x1="80" y1="598" x2="80" y2="632"></line>
+      <circle class="bk" cx="80" cy="610" r="3"></circle>
+      <circle class="bk" cx="80" cy="622" r="3"></circle>
+      <circle class="bk" cx="80" cy="634" r="3"></circle>
+      <text class="ts" x="92" y="622">leak 1 / 90s</text>
+      <text class="ts" x="200" y="548">queue full → 11th is 429</text>
+      <text class="ts" x="200" y="568">the 10 that got in wait in line</text>
+      <text class="ts" x="200" y="588">output never faster than the leak</text>
+      <text class="ts" x="200" y="608">gateways use this to protect a slow DB</text>
+    </svg>
+    <figcaption>Fig. 11 &mdash; same traffic, five verdicts. Only fixed window lets the edge burst through. Token bucket bursts on entry; leaky bucket never bursts on the way out</figcaption>
+  </figure>
+
+  <h4>1. Fixed window</h4>
+  <p>Count requests per fixed clock block. The counter resets to 0 when the window ends. Simple and cheap, but
+  it allows a burst at the edge.</p>
+  <pre>14:50  req 1..10   counter = 10, all allowed
+14:52  req 11      counter still 10 → 429 blocked
+15:00  new window  counter = 0
+15:00  req 1..10   allowed again
+
+<span class="c">the edge problem</span>
+14:59  10 requests  allowed (window 14:45–15:00)
+15:00  10 requests  allowed (window 15:00–15:15)
+→ 20 requests in ~1 minute even though the rule says 10 per 15 min</pre>
+
+  <h4>2. Sliding window log</h4>
+  <p>Store the timestamp of every request; on each new request drop the timestamps older than the window and
+  count what is left. Most accurate, no edge burst, but memory grows with traffic.</p>
+  <pre>stored list for this IP: [14:59:01 ... 14:59:10]   <span class="c">10 timestamps</span>
+
+15:00:05 new request → drop older than 14:45:05 → nothing dropped → count 10 → 429
+15:14:20 new request → drop older than 14:59:20 → all 10 dropped  → count 0  → allowed</pre>
+
+  <h4>3. Sliding window counter</h4>
+  <p>Middle ground: keep small counters per sub-window and weight the previous window instead of storing every
+  timestamp. Near accurate with far less memory.</p>
+  <pre>previous window 14:45–15:00 → 10 requests
+current  window 15:00–15:15 → 2 requests so far
+now 15:03 → 80% of the current window still overlaps the previous one
+
+estimate = 10 * 0.8  + 2 = 10    → 429 blocked
+at 15:14   10 * 0.06 + 2 = 2.6   → allowed</pre>
+
+  <h4>4. Token bucket</h4>
+  <p>The bucket holds N tokens, refilled at a steady rate; each request takes one token, and an empty bucket
+  means reject. Allows a short burst (saved-up tokens) but limits the average rate.</p>
+  <pre>bucket size 10, refill 1 token every 90 sec
+
+start        tokens = 10
+15:00:00     10 requests fired at once → all allowed, tokens = 0
+15:00:05     req 11 → no token → 429 blocked
+15:01:30     +1 token → 1 request allowed, tokens = 0
+15:03:00     +1 token → 1 request allowed
+
+idle for 15 min → bucket fills back to 10, burst allowed again</pre>
+
+  <h4>5. Leaky bucket</h4>
+  <p>Not token bucket flipped. Requests enter a <b>queue</b>. The queue leaks at a fixed rate &mdash; one
+  request processed every 90 seconds, no faster. A burst of 10 does <b>not</b> all run at once: they line up
+  and drip out. If the queue is already full, the new request is 429.</p>
+  <pre>queue size 10, leak 1 request every 90 sec
+
+15:00:00     10 requests arrive at once
+             all 10 sit in the queue — none run together
+15:00:05     request 11 arrives → queue full → 429
+15:01:30     request 2 processed (90 sec after the first)
+15:03:00     request 3 processed
+
+output is always smooth. the client that sent 10 at once waits.</pre>
+  <p>Side by side, because the names get mixed up:</p>
+  <pre>                   token bucket                 leaky bucket
+stored             tokens (permission now)      queued requests
+10 at once         all 10 run immediately       all 10 queue, drip one by one
+idle then busy     burst allowed (tokens saved) no burst — leak rate never changes
+feels like         a generous public API        a traffic cop / message queue</pre>
+  <p>Leaky bucket is how you shape traffic leaving a system (an API gateway, a queue in front of a slow DB).
+  Token bucket is how you allow a client a burst. This project uses neither &mdash;
+  <code>express-rate-limit</code> is <b>fixed window</b>.</p>
+
+  <h3>Which one is implemented here</h3>
+  <div class="block">
+    <p><b>Fixed window</b> &mdash; that is what <code>express-rate-limit</code> does by default with
+    <code>windowMs</code> + <code>max</code>.</p>
+    <pre>windowMs → how long one window lasts
+max      → how many requests one IP gets inside that window
+key      → client IP by default, so the count is per IP not global
+handler  → instead of the default plain text 429, we call
+           next(new AppError('Too many requests, please try again later', 429))
+           so the 429 comes out in the same JSON shape as every other error</pre>
+    <p>Two limiters, because auth needs to be stricter:</p>
+    <pre>apiLimiter  → all /tasks routes, normal usage
+authLimiter → /auth routes, slows down brute-force login/register guessing</pre>
+    <p>Limits are counted in memory, fine for one process. With multiple instances or after a restart the
+    counters reset, so production uses a shared store like Redis.</p>
+  </div>
+</section>
+
+<!-- ============================================================ 12 -->
+<section class="chapter" id="c12">
+  <h2><span class="badge">12</span> Swagger</h2>
+  <p class="standfirst">Docs generated from comments next to the routes, so they cannot drift.</p>
+
+  <span class="tag">Package installed</span>
+  <pre class="terminal">npm install swagger-jsdoc swagger-ui-express</pre>
+  <pre>swagger-jsdoc      reads the @openapi comments and builds one JSON spec
+swagger-ui-express serves that JSON as the browser page</pre>
+
+  <figure>
+    <svg viewBox="0 0 820 240" role="img" aria-label="How the Swagger spec is produced and served">
+      <rect class="b" x="8" y="30" width="170" height="70" rx="4"></rect>
+      <text class="tb" x="22" y="54">routes/*.js</text>
+      <text class="ts" x="22" y="74">@openapi comments</text>
+      <text class="ts" x="22" y="92">one block per endpoint</text>
+
+      <rect class="b" x="8" y="120" width="170" height="70" rx="4"></rect>
+      <text class="tb" x="22" y="144">docs/swagger.js</text>
+      <text class="ts" x="22" y="164">info, servers, security</text>
+      <text class="ts" x="22" y="182">components (shared)</text>
+
+      <rect class="b" x="248" y="70" width="180" height="70" rx="4"></rect>
+      <text class="tb" x="262" y="98">swagger-jsdoc</text>
+      <text class="ts" x="262" y="118">merges both → one spec</text>
+
+      <rect class="bk" x="498" y="70" width="140" height="70" rx="4"></rect>
+      <text class="tw" x="512" y="98">OpenAPI</text>
+      <text class="tsw" x="512" y="118">3.0.3 JSON</text>
+
+      <rect class="b" x="688" y="20" width="124" height="62" rx="4"></rect>
+      <text class="tb" x="700" y="44">/api-docs</text>
+      <text class="ts" x="700" y="64">browser UI</text>
+
+      <rect class="b" x="688" y="128" width="124" height="62" rx="4"></rect>
+      <text class="tb" x="700" y="152">/api-docs</text>
+      <text class="ts" x="700" y="172">.json → Postman</text>
+
+      <path class="ar" d="M178,65 H244"></path>
+      <path class="ar" d="M178,155 H210 V105 H244"></path>
+      <path class="ar" d="M428,105 H494"></path>
+      <path class="ar" d="M638,90 H660 V51 H684"></path>
+      <path class="ar" d="M638,120 H660 V159 H684"></path>
+
+      <text class="ts" x="248" y="170">$ref pulls a shared schema instead of repeating it</text>
+      <text class="ts" x="248" y="190">change Task once → every endpoint updates</text>
+    </svg>
+    <figcaption>Fig. 12 &mdash; comments plus one config file become the spec, then the page</figcaption>
+  </figure>
+
+  <span class="tag">Important code</span>
+  <h4>1. docs/swagger.js &mdash; the spec</h4>
+  <pre><span class="c">const</span> options = {
+    definition: {
+        openapi: '3.0.3',
+        info: { title: 'Todo API', version: '1.0.0' },
+        servers: [{ url: `http://localhost:${PORT}/api/v1` }],
+        components,                      <span class="c">// schemas, responses, securitySchemes</span>
+        security: [{ bearerAuth: [] }]   <span class="c">// every route needs a token by default</span>
+    },
+    apis: ['./routes/*.js']              <span class="c">// where to look for the comments</span>
+};
+
+module.exports = swaggerJsdoc(options);</pre>
+  <p><code>components</code> is the reusable part, written once and referenced everywhere:</p>
+  <pre>securitySchemes.bearerAuth  → the Authorize button, http + bearer + JWT
+schemas.Task / TaskInput    → request and response body shape
+schemas.Error               → { success, status, message, errors? }
+responses.Unauthorized      → ready made 401 block
+parameters.TaskId           → the :id path param</pre>
+
+  <h4>2. routes/*.js &mdash; the per-endpoint comment</h4>
+  <pre>/**
+ * @openapi
+ * /auth/register:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Create an account
+ *     security: []                       <span class="c"># public, opt out of the global token</span>
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/RegisterRequest'
+ *     responses:
+ *       201:
+ *         description: Account created
+ *       409:
+ *         description: Email already registered
+ *       429:
+ *         $ref: '#/components/responses/TooManyRequests'
+ */
+router.post('/register', register);</pre>
+
+  <h4>3. app.js &mdash; serve it</h4>
+  <pre>app.use('/api-docs', docsSecurityHeaders, swaggerUi.serve,
+    swaggerUi.setup(swaggerSpec, {
+        swaggerOptions: { persistAuthorization: <span class="c">true</span> }  <span class="c">// keep pasted token on reload</span>
+    }));
+
+<span class="c">// raw spec, for postman import or client generators</span>
+app.get('/api-docs.json', (req, res) =&gt; res.json(swaggerSpec));</pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li><code>$ref</code> means "use the shared piece from <code>components</code>", so changing the Task
+        schema is one edit, not eight.</li>
+      <li>The <code>servers</code> url already contains <code>/api/v1</code>, so route comments write
+        <code>/auth/register</code>, not <code>/api/v1/auth/register</code>.</li>
+      <li><code>/api-docs</code> is mounted outside <code>/api/v1</code>, same as <code>/health</code> &mdash;
+        it describes the server, not one API version.</li>
+    </ul>
+  </div>
+
+  <div class="gotcha">
+    <div class="head">&#9888; One gotcha &mdash; helmet CSP</div>
+    <p>Swagger UI loads an inline script and inline styles; the global helmet CSP blocks them and the page
+    renders blank. Relax CSP <b>only on this path</b>, not app-wide.</p>
+    <pre><span class="c">const</span> docsSecurityHeaders = helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", 'data:']
+        }
+    }
+});</pre>
+  </div>
+
+  <h4>How to use it</h4>
+  <pre>open http://localhost:3005/api-docs
+register → login → copy token → Authorize → paste
+now protected task endpoints can be tried straight from the browser</pre>
+
+  <blockquote><p>The comments are documentation only &mdash; they do not validate anything. The real checks
+  live in the controllers and the model.</p></blockquote>
+</section>
+
+<!-- ============================================================ 13 -->
+<section class="chapter" id="c13">
+  <h2><span class="badge">13</span> Validation</h2>
+  <p class="standfirst">Four layers, cheapest first &mdash; and only cleaned fields reach the database.</p>
+
+  <span class="tag">Package installed</span>
+  <div class="block"><p>Nothing. Hand written in <code>controllers/task.js</code> &mdash; no
+  <code>express-validator</code>, no Joi. Mongoose (already installed) provides the last layer.</p></div>
+
+  <figure>
+    <svg viewBox="0 0 820 330" role="img" aria-label="Four layers of validation">
+      <rect class="b" x="120" y="14" width="580" height="46" rx="4"></rect>
+      <text class="tb" x="136" y="36">1 · express.json()</text>
+      <text class="ts" x="136" y="52">valid JSON? under 100kb? → else 400 Malformed JSON</text>
+
+      <rect class="b" x="160" y="80" width="500" height="46" rx="4"></rect>
+      <text class="tb" x="176" y="102">2 · validateObjectId</text>
+      <text class="ts" x="176" y="118">is :id a real ObjectId? → 400 before any query runs</text>
+
+      <rect class="b" x="200" y="146" width="420" height="46" rx="4"></rect>
+      <text class="tb" x="216" y="168">3 · validateTaskBody</text>
+      <text class="ts" x="216" y="184">allowlist, types, lengths, enums, dates, cross-field</text>
+
+      <rect class="b" x="240" y="212" width="340" height="46" rx="4"></rect>
+      <text class="tb" x="256" y="234">4 · mongoose schema</text>
+      <text class="ts" x="256" y="250">enum / required / cast — last line of defence</text>
+
+      <rect class="bk" x="300" y="278" width="220" height="42" rx="4"></rect>
+      <text class="tw" x="330" y="304">MongoDB write</text>
+
+      <path class="ar" d="M410,60 V76"></path><path class="ar" d="M410,126 V142"></path>
+      <path class="ar" d="M410,192 V208"></path><path class="ar" d="M410,258 V274"></path>
+
+      <path class="ar-d" d="M700,37 H770 V300 H528"></path>
+      <text class="ts" x="632" y="150">any layer can</text>
+      <text class="ts" x="632" y="168">stop the request</text>
+      <text class="ts" x="632" y="186">with one 400</text>
+
+      <text class="ts" x="8" y="120">cheap</text>
+      <text class="ts" x="8" y="240">expensive</text>
+      <path class="ar" d="M30,130 V228"></path>
+    </svg>
+    <figcaption>Fig. 13 &mdash; each layer is more expensive than the last, so reject early</figcaption>
+  </figure>
+
+  <span class="tag">Important code</span>
+  <h4>One reader per field, shared by create / update / bulk</h4>
+  <pre><span class="c">const</span> readText = (value, field, min, max, errors) =&gt; {
+    <span class="c">// type check first, then measure the trimmed value — "  ab  " is 2 chars, not 6</span>
+    <span class="c">const</span> text = <span class="c">typeof</span> value === 'string' ? value.trim() : '';
+    <span class="c">if</span> (text.length &lt; min || text.length &gt; max) {
+        errors.push({ field, message: `${field} must be a string between ${min} and ${max} characters` });
+        <span class="c">return undefined</span>;
+    }
+    <span class="c">return</span> text;
+};
+
+<span class="c">const</span> TASK_FIELD_READERS = {
+    title:       (v, f, e) =&gt; readText(v, f, 3, 100, e),
+    description: (v, f, e) =&gt; readText(v, f, 3, 1000, e),
+    status:      (v, f, e) =&gt; readEnum(v, f, TASK_STATUSES, e),
+    priority:    (v, f, e) =&gt; readEnum(v, f, TASK_PRIORITIES, e),
+    dueDate:     (v, f, e) =&gt; readDate(v, f, e),
+    tags:        (v, f, e) =&gt; readStringArray(v, f, ARRAY_FIELD_RULES.tags, e)
+    <span class="c">// ...</span>
+};</pre>
+
+  <h4>One validator, three modes</h4>
+  <pre><span class="c">// partial: PATCH sends only changed fields, so missing ones are not errors</span>
+<span class="c">// prefix : bulk labels errors as "tasks[2].title"</span>
+<span class="c">const</span> validateTaskBody = (body, { partial = <span class="c">false</span>, prefix = '' } = {}) =&gt; {
+    <span class="c">const</span> errors = [];
+    <span class="c">// a non-JSON request leaves req.body undefined — report a 400, not a crash</span>
+    <span class="c">const</span> source = body !== <span class="c">null</span> &amp;&amp; <span class="c">typeof</span> body === 'object' ? body : {};
+
+    <span class="c">// catch client typos like "prioriy" instead of letting Mongoose drop them silently</span>
+    <span class="c">for</span> (<span class="c">const</span> key <span class="c">of</span> Object.keys(source)) {
+        <span class="c">if</span> (!(key <span class="c">in</span> TASK_FIELD_READERS) &amp;&amp; !SERVER_OWNED_FIELDS.includes(key)) {
+            errors.push({ field: key, message: `${key} is not an allowed field` });
+        }
+    }
+
+    <span class="c">const</span> value = {};   <span class="c">// only known, cleaned fields end up here</span>
+
+    <span class="c">for</span> (<span class="c">const</span> [field, read] <span class="c">of</span> Object.entries(TASK_FIELD_READERS)) {
+        <span class="c">if</span> (!Object.hasOwn(source, field)) {
+            <span class="c">if</span> (!partial &amp;&amp; REQUIRED_TASK_FIELDS.includes(field)) {
+                errors.push({ field, message: `${field} is required` });
+            }
+            <span class="c">continue</span>;
+        }
+        <span class="c">const</span> parsed = read(source[field], field, errors);
+        <span class="c">if</span> (parsed !== <span class="c">undefined</span>) value[field] = parsed;
+    }
+
+    <span class="c">return</span> { errors, value };
+};</pre>
+
+  <h4>Used in the controller</h4>
+  <pre>exports.createTask = <span class="c">async</span> (req, res, next) =&gt; {
+    <span class="c">const</span> { errors, value } = validateTaskBody(req.body);
+
+    <span class="c">if</span> (errors.length &gt; 0) {
+        <span class="c">return</span> next(<span class="c">new</span> AppError('Validation failed', 400, errors));
+    }
+
+    <span class="c">const</span> task = <span class="c">new</span> Task({ ...value, userId: req.user._id });   <span class="c">// owner from the token</span>
+    <span class="c">const</span> saved = <span class="c">await</span> task.save();
+    res.status(201).json(saved);
+};</pre>
+
+  <h4>Ids are validated before they reach mongo</h4>
+  <pre><span class="c">// middleware/validateObjectId.js</span>
+exports.validateObjectId = (param = 'id') =&gt; (req, res, next) =&gt; {
+    <span class="c">if</span> (!mongoose.Types.ObjectId.isValid(req.params[param])) {
+        <span class="c">return</span> next(<span class="c">new</span> AppError('Validation failed', 400, [
+            { field: param, message: `${param} must be a valid task id` }
+        ]));
+    }
+    next();
+};</pre>
+
+  <h4>The schema is the last line of defence</h4>
+  <pre><span class="c">// models/task.js</span>
+status: { type: String, enum: ['not-started', 'pending', 'completed', 'in-progress'], default: 'not-started' }
+
+<span class="c">// and on update</span>
+findOneAndUpdate(query, updates, { <span class="c">new</span>: <span class="c">true</span>, runValidators: <span class="c">true</span> })</pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <h4>Why it is written this way</h4>
+    <ul>
+      <li><b>Allowlist, not blocklist.</b> An unknown key is a <code>400</code>, so a typo like
+        <code>prioriy</code> is reported instead of being silently dropped by Mongoose.</li>
+      <li><b>Server-owned fields are dropped, not rejected</b> (<code>_id</code>, <code>userId</code>,
+        <code>createdAt</code>, <code>updatedAt</code>, <code>__v</code>) so a client can PATCH back a task it
+        fetched.</li>
+      <li><b>Only <code>value</code> reaches the database.</b> The raw body is never spread into the model, so
+        a client cannot set <code>userId</code> and steal ownership &mdash; that comes from
+        <code>req.user._id</code>. This is what stops mass assignment.</li>
+      <li><b>Collect every error, don't stop at the first.</b> The client fixes the whole form in one round
+        trip.</li>
+      <li><b>Normalise before comparing.</b> <code>"In Progress"</code> becomes <code>in-progress</code>, text
+        is trimmed, tag arrays are trimmed and de-duplicated.</li>
+      <li><b>Cross-field rules live here too.</b> <code>startReminder</code> must be before
+        <code>dueDate</code>; dates cannot be in the past. On a PATCH that sends only one of the two dates,
+        the controller loads the stored one and compares against it.</li>
+      <li><b>Same shape as every other error</b>, because each entry is <code>{ field, message }</code> &mdash;
+        and <code>normaliseError</code> maps Mongoose's <code>ValidationError</code> into exactly that
+        shape.</li>
+    </ul>
+    <pre>{
+  "success": false,
+  "status": 400,
+  "message": "Validation failed",
+  "errors": [
+    { "field": "title", "message": "title must be a string between 3 and 100 characters" },
+    { "field": "description", "message": "description is required" }
+  ]
+}</pre>
+    <p><b>Bulk create reuses all of it</b> &mdash; each element is validated with
+    <code>prefix: "tasks[2]."</code>, so the client is told exactly which task in the batch failed, and the
+    batch is capped at 10 per request.</p>
+  </div>
+
+  <blockquote><p>A library (Joi / Zod / express-validator) would replace the readers with a schema and less
+  code. The layering and the error shape would stay the same.</p></blockquote>
+</section>
+
+<!-- ============================================================ 14 -->
+<section class="chapter" id="c14">
+  <h2><span class="badge">14</span> Health check</h2>
+  <p class="standfirst">One route that answers a real question: should this instance receive traffic?</p>
+
+  <span class="tag">Package installed</span>
+  <div class="block"><p>Nothing &mdash; one route plus a mongoose property.</p></div>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">// app.js — public, unauthenticated, no rate limit, unversioned</span>
+app.get('/health', (req, res) =&gt; {
+    <span class="c">const</span> dbConnected = mongoose.connection.readyState === 1;
+
+    res.status(dbConnected ? 200 : 503).json({
+        status: dbConnected ? 'ok' : 'unavailable',
+        db: dbConnected ? 'connected' : 'disconnected',
+        uptime: Math.floor(process.uptime())
+    });
+});</pre>
+  <pre><span class="c">// keep the polling out of the logs</span>
+<span class="c">const</span> skipHealthCheck = (req) =&gt; req.path === '/health';
+
+app.use(morgan(isProduction ? 'combined' : 'dev', { skip: skipHealthCheck }));</pre>
+
+  <figure>
+    <svg viewBox="0 0 820 250" role="img" aria-label="Health check decision and what the load balancer does">
+      <rect class="b" x="8" y="70" width="150" height="60" rx="4"></rect>
+      <text class="tb" x="22" y="94">load balancer</text>
+      <text class="ts" x="22" y="114">pings every 10s</text>
+
+      <rect class="b" x="208" y="70" width="160" height="60" rx="4"></rect>
+      <text class="tb" x="222" y="94">GET /health</text>
+      <text class="ts" x="222" y="114">no auth, no limiter</text>
+
+      <path class="b" d="M418,100 L510,58 L602,100 L510,142 Z"></path>
+      <text class="ts" x="448" y="96">readyState</text>
+      <text class="ts" x="470" y="112">=== 1 ?</text>
+
+      <rect class="b" x="654" y="40" width="158" height="52" rx="4"></rect>
+      <text class="tb" x="668" y="62">200 ok</text>
+      <text class="ts" x="668" y="80">keep sending traffic</text>
+
+      <rect class="bk" x="654" y="112" width="158" height="52" rx="4"></rect>
+      <text class="tw" x="668" y="134">503 unavailable</text>
+      <text class="tsw" x="668" y="152">pull out of rotation</text>
+
+      <path class="ar" d="M158,100 H204"></path>
+      <path class="ar" d="M368,100 H414"></path>
+      <path class="ar" d="M602,100 H628 V66 H650"></path>
+      <path class="ar" d="M510,142 V180 H628 V138 H650"></path>
+      <text class="ts" x="520" y="170">db down</text>
+
+      <rect class="b" x="8" y="196" width="600" height="48" rx="4" style="stroke-dasharray:6 4"></rect>
+      <text class="ts" x="22" y="218">app.listen succeeds even when mongo is down — mongoose.connect is async and nobody waits</text>
+      <text class="ts" x="22" y="236">so "is Node alive" is the wrong question; readyState makes the answer honest</text>
+    </svg>
+    <figcaption>Fig. 14 &mdash; the status code is the message; monitors never read the JSON</figcaption>
+  </figure>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li>A load balancer, container platform or uptime monitor pings this every few seconds to decide whether
+        this instance should receive traffic.</li>
+      <li><b>It answers a real question, not "is Node alive".</b> <code>app.listen</code> succeeds even when
+        the database is down, because <code>mongoose.connect</code> is asynchronous and nobody waits for it.
+        So the server can be listening and still fail every request.</li>
+      <li><code>readyState</code> is a <b>property read, not a query</b>, so this stays cheap even when polled
+        constantly. A real ping would add load exactly when the system is already unhealthy.</li>
+      <li><b>The status code is the message.</b> <code>200</code> means keep sending traffic,
+        <code>503</code> means take this instance out of rotation.</li>
+      <li><b>No auth and no rate limit</b>, because the checker has no token and polls constantly. It exposes
+        nothing sensitive &mdash; just up/down and uptime.</li>
+      <li><b>Unversioned</b>, mounted next to <code>/api-docs</code>, because it describes the server rather
+        than the v1 API contract.</li>
+      <li>Morgan skips it, otherwise a check every 10 seconds buries real traffic &mdash; roughly 8,600 lines
+        a day of noise.</li>
+    </ul>
+    <pre>readyState → 0 disconnected · <b>1 connected — the only healthy value</b> · 2 connecting · 3 disconnecting</pre>
+    <h4>What a bigger app adds later</h4>
+    <pre>version / git commit    which build is actually running
+separate endpoints      /health/live (restart me?) vs /health/ready (send traffic?)
+dependency checks       redis, S3, third-party APIs</pre>
+  </div>
+</section>
+
+<!-- ============================================================ 15 -->
+<section class="chapter" id="c15">
+  <h2><span class="badge">15</span> Request logging</h2>
+  <p class="standfirst">One line per finished request &mdash; and the lines you most need are the ones a late
+  mount would lose.</p>
+
+  <span class="tag">Package installed</span>
+  <pre class="terminal">npm install morgan</pre>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">// app.js</span>
+<span class="c">const</span> isProduction = process.env.NODE_ENV === 'production';
+
+<span class="c">// a health check pinged every 10s would bury real traffic</span>
+<span class="c">const</span> skipHealthCheck = (req) =&gt; req.path === '/health';
+
+<span class="c">// console log — mounted early so 404s and 429s are logged too</span>
+app.use(morgan(isProduction ? 'combined' : 'dev', { skip: skipHealthCheck }));
+
+<span class="c">// local history only. Container disks are ephemeral, so in production we log to</span>
+<span class="c">// stdout and let the platform (CloudWatch / Azure Monitor) capture it.</span>
+<span class="c">if</span> (!isProduction) {
+    <span class="c">const</span> logsDir = path.join(__dirname, 'logs');
+    fs.mkdirSync(logsDir, { recursive: <span class="c">true</span> });
+
+    app.use(morgan('combined', {
+        stream: fs.createWriteStream(path.join(logsDir, 'access.log'), { flags: 'a' }),
+        skip: skipHealthCheck
+    }));
+}</pre>
+
+  <span class="tag">Logic</span>
+  <h4>dev vs combined &mdash; same request, two audiences</h4>
+  <pre><span class="c">dev       (development, coloured, short)</span>
+GET /api/v1/tasks 200 14.271 ms - 542
+
+<span class="c">combined  (production / file, Apache format)</span>
+::1 - - [12/Aug/2026:11:42:09 +0000] "GET /api/v1/tasks HTTP/1.1" 200 542
+    "-" "PostmanRuntime/7.43.0"</pre>
+  <p><code>dev</code> is for a human watching a terminal. <code>combined</code> adds IP, timestamp, referrer
+  and user-agent &mdash; the fields log tools parse, and the ones you actually need when debugging something
+  that happened yesterday.</p>
+
+  <div class="block">
+    <ul>
+      <li><b>Two <code>app.use(morgan(...))</code> calls, on purpose.</b> The first writes to the console, the
+        second appends to <code>logs/access.log</code>. Morgan writes to one stream per instance, so two
+        destinations means two instances. The file one only runs in development because container disks are
+        wiped on restart.</li>
+      <li><b>It logs when the response finishes, not when the request arrives.</b> That is how it knows the
+        status code and the duration &mdash; so a request that hangs forever never appears in the log, which is
+        itself a clue.</li>
+      <li><b>Mounted early, above the routes.</b> Anything registered later is still logged, because the line
+        is written at response time. Being early means requests that never reach a route are logged too: 404s,
+        429s from the rate limiter, and CORS rejections. Put morgan below the routes and you lose exactly the
+        lines you want during an incident.</li>
+      <li><b>Skipping <code>/health</code>.</b> A load balancer polling every 10 seconds writes about 8,600
+        lines a day of nothing. <code>skip</code> takes a function returning true to drop the line.</li>
+    </ul>
+  </div>
+
+  <div class="gotcha">
+    <div class="head">What morgan does not do</div>
+    <p>It never logs error details or stack traces &mdash; it only sees status codes. Error bodies come from
+    <code>console.error</code> in the global handler. Together they give the full picture: morgan says
+    <i>what was requested</i>, the error handler says <i>what went wrong</i>.</p>
+    <pre>morgan          → GET /api/v1/tasks/abc 400 2.104 ms - 118
+error handler   → the AppError, or the full stack for a bug</pre>
+  </div>
+
+  <blockquote><p>Later, a real app replaces this with structured JSON logs (pino / winston) plus a request id,
+  so one user's journey can be traced across many lines.</p></blockquote>
+</section>
+
+<!-- ============================================================ 16 -->
+<section class="chapter" id="c16">
+  <h2><span class="badge">16</span> Middleware order</h2>
+  <p class="standfirst">The order is not style. It is the program.</p>
+
+  <span class="tag">Package installed</span>
+  <div class="block"><p>Nothing &mdash; this is just the order the lines are written in.</p></div>
+
+  <span class="tag">Important code</span>
+  <pre>app.use(helmet());                          <span class="c">// 1  safe headers</span>
+app.use(morgan(...));                       <span class="c">// 2  log every request</span>
+app.use(cors({ ... }));                     <span class="c">// 3  who may call us</span>
+app.use(express.json());                    <span class="c">// 4  body → req.body</span>
+app.use(express.urlencoded({ extended: <span class="c">true</span> }));
+app.use(express.static('public'));          <span class="c">// 5  serve files if they exist</span>
+app.get('/health', ...);                    <span class="c">// 6  infrastructure endpoints</span>
+app.use('/api-docs', docsSecurityHeaders, swaggerUi.serve, swaggerUi.setup(...));
+app.use('/api/v1', v1Routes);               <span class="c">// 7  the real API</span>
+app.use((req, res, next) =&gt; {               <span class="c">// 8  404 — nothing matched</span>
+    next(<span class="c">new</span> AppError(`Route not found: ${req.method} ${req.originalUrl}`, 404));
+});
+app.use((err, req, res, next) =&gt; { ... });  <span class="c">// 9  error handler — LAST</span></pre>
+
+  <p>The diagram in <a href="#c3">chapter 3</a> is this same list, drawn.</p>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <p><b>The model.</b> Express keeps one ordered list. For each request it walks the list from the top and
+    runs whatever matches the path. Each middleware then either <b>answers</b> (<code>res.json</code>,
+    <code>res.send</code>) or <b>passes on</b> (<code>next()</code>). The first one to answer ends the
+    request; everything below it never runs.</p>
+    <h4>Why each position matters</h4>
+    <pre>1 helmet first        every response gets the headers, including 404s and errors
+2 morgan next         so 404s, 429s and CORS rejections are logged too
+3 cors before parsers a blocked origin is rejected before we buffer its body
+4 body parsers        must run BEFORE any route that reads req.body
+5 static              a real file short-circuits and skips your routes entirely
+6 /health, /api-docs  specific paths, unversioned, registered before the API
+7 /api/v1 router      the real work — rate limiter lives inside routes/v1.js
+8 404 catch-all       only reached because nothing above it answered
+9 error handler       must be last, and must take 4 arguments</pre>
+    <h4>Two special positions</h4>
+    <ul>
+      <li><b>The 404 has no path</b>, so it matches everything. That only works because it sits <i>below</i>
+        every real route. Move it up one line and your whole API returns 404. Its job is "we got to the bottom
+        of the list, so nothing matched".</li>
+      <li><b>The error handler is recognised by its 4 parameters</b> <code>(err, req, res, next)</code>. It is
+        skipped during normal flow and only entered when something calls <code>next(err)</code> or throws.
+        Mounted anywhere but last, it never sees the errors from the routes below it.</li>
+    </ul>
+  </div>
+
+  <div class="gotcha">
+    <div class="head">&#9888; What breaks if you get it wrong</div>
+    <pre>express.json() after the routes   → req.body is undefined in every controller
+helmet last                       → 404 and error responses lose their headers
+morgan last                       → the failures you want to debug are unlogged
+404 above the routes              → every request 404s
+error handler not last            → errors fall through to Express's default
+                                    HTML error page instead of your JSON shape
+error handler with 3 arguments    → treated as normal middleware, never runs</pre>
+  </div>
+
+  <blockquote><p>One rule of thumb: cheap and universal at the top, specific in the middle, catch-alls at the
+  bottom.</p></blockquote>
+</section>
+
+<!-- ============================================================ 17 -->
+<section class="chapter" id="c17">
+  <h2><span class="badge">17</span> Ownership scoping</h2>
+  <p class="standfirst">The owner belongs in the query, not in an <code>if</code> after it.</p>
+
+  <span class="tag">Package installed</span>
+  <div class="block"><p>Nothing &mdash; a discipline, applied in every controller.</p></div>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">// every read, update and delete is filtered by owner</span>
+<span class="c">const</span> filter = { userId: req.user._id };
+
+<span class="c">await</span> Task.findOne({ _id: req.params.id, userId: req.user._id });
+<span class="c">await</span> Task.findOneAndUpdate({ _id: req.params.id, userId: req.user._id }, updates, { <span class="c">new</span>: <span class="c">true</span> });
+<span class="c">await</span> Task.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
+
+<span class="c">// and on create, the owner comes from the token — never from the body</span>
+<span class="c">const</span> task = <span class="c">new</span> Task({ ...value, userId: req.user._id });</pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li><code>req.user</code> was set by <code>protect</code> (chapter 6), so <code>req.user._id</code> is
+        the only identity the controllers trust.</li>
+      <li>The owner is part of the <b>query</b>, not a check afterwards. <code>findOne({ _id })</code> followed
+        by an <code>if</code> would still load someone else's document into memory first.</li>
+      <li>Someone else's id returns <code>null</code>, and the controller answers <b>404, not 403</b> &mdash;
+        "not found" leaks nothing about whether that id exists at all.</li>
+      <li><code>userId</code> is in <code>SERVER_OWNED_FIELDS</code>, so a client sending
+        <code>userId</code> in the body has it dropped. Without that, a user could create tasks owned by
+        someone else.</li>
+      <li>This is the whole authorization model right now: one user, their own rows. Role-based rules
+        (<code>admin</code> sees all) are still on the todo list.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================ 18 -->
+<section class="chapter" id="c18">
+  <h2><span class="badge">18</span> Query features</h2>
+  <p class="standfirst">Build one filter object, hand it to mongo once.</p>
+
+  <span class="tag">Package installed</span>
+  <div class="block"><p>Nothing &mdash; plain mongoose query building.</p></div>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">const</span> filter = { userId: req.user._id };
+
+<span class="c">if</span> (req.query.status) filter.status = req.query.status;
+<span class="c">if</span> (req.query.priority) filter.priority = req.query.priority;
+<span class="c">if</span> (req.query.tag) filter.tags = req.query.tag;      <span class="c">// matches one item in the array</span>
+
+<span class="c">if</span> (req.query.search) {
+    filter.$or = [
+        { title: { $regex: req.query.search, $options: 'i' } },
+        { description: { $regex: req.query.search, $options: 'i' } }
+    ];
+}
+
+<span class="c">// allowlist — an unknown sort field is ignored, not passed to mongo</span>
+<span class="c">const</span> allowedSortFields = ['createdAt', 'updatedAt', 'dueDate', 'title', 'priority', 'status'];
+<span class="c">let</span> sort = '-createdAt';
+
+<span class="c">if</span> (req.query.sort) {
+    <span class="c">const</span> field = req.query.sort.startsWith('-') ? req.query.sort.slice(1) : req.query.sort;
+    <span class="c">if</span> (allowedSortFields.includes(field)) sort = req.query.sort;
+}
+
+<span class="c">const</span> tasks = <span class="c">await</span> Task.find(filter).sort(sort);</pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li>The filter object is <b>built up</b>, then handed to mongo once &mdash; one query, not one per
+        option.</li>
+      <li><code>filter.tags = 'work'</code> matches an array containing <code>'work'</code>. Mongoose does that
+        for array fields automatically.</li>
+      <li><code>$or</code> + <code>$regex</code> with <code>$options: 'i'</code> is a case-insensitive
+        "contains" across two fields.</li>
+      <li>The sort <b>allowlist</b> exists so a client cannot sort by an arbitrary field and force an expensive
+        unindexed scan. Anything unknown silently falls back to <code>-createdAt</code> (newest first).</li>
+      <li><code>-field</code> means descending, so <code>?sort=-dueDate</code> works.</li>
+    </ul>
+    <pre>GET /tasks?status=pending&amp;priority=high&amp;tag=work&amp;search=milk&amp;sort=-dueDate</pre>
+  </div>
+
+  <blockquote><p>Two known gaps: no pagination yet, so this returns every matching row, and
+  <code>search</code> goes straight into <code>$regex</code> unescaped &mdash; a user typing <code>(</code>
+  breaks the query. Both are on the todo list.</p></blockquote>
+</section>
+
+<!-- ============================================================ 19 -->
+<section class="chapter" id="c19">
+  <h2><span class="badge">19</span> Bulk endpoints</h2>
+  <p class="standfirst">Validate the whole batch, then write once.</p>
+
+  <span class="tag">Package installed</span>
+  <div class="block"><p>Nothing.</p></div>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">// routes/task.js — NOTE the order</span>
+router.delete('/bulk', deleteManyTasks);              <span class="c">// static path first</span>
+router.get('/:id', validateObjectId(), getTaskById);  <span class="c">// param route after</span>
+router.post('/bulk', createTasksInBulk);</pre>
+  <pre><span class="c">// create many — capped, and every element validated</span>
+<span class="c">const</span> BULK_CREATE_LIMIT = 10;
+
+<span class="c">if</span> (!Array.isArray(tasksFromBody) || tasksFromBody.length === 0) {
+    <span class="c">throw new</span> AppError('Send an array of tasks in body.tasks', 400, [
+        { field: 'tasks', message: 'tasks must be a non-empty array' }
+    ]);
+}
+
+tasksFromBody.forEach((task, index) =&gt; {
+    <span class="c">const</span> { errors: taskErrors, value } = validateTaskBody(task, { prefix: `tasks[${index}].` });
+    errors.push(...taskErrors);
+    tasksWithUser.push({ ...value, userId: req.user._id });
+});
+
+<span class="c">if</span> (errors.length &gt; 0) <span class="c">throw</span> validationError(errors);
+
+<span class="c">const</span> savedTasks = <span class="c">await</span> Task.insertMany(tasksWithUser);</pre>
+  <pre><span class="c">// delete many — ids scoped to the owner</span>
+<span class="c">const</span> result = <span class="c">await</span> Task.deleteMany({ _id: { $in: ids }, userId: req.user._id });
+res.json({ message: `${result.deletedCount} task(s) deleted`, deletedCount: result.deletedCount });</pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li><b>Route order gotcha:</b> <code>/bulk</code> must be registered <b>before</b> <code>/:id</code>,
+        otherwise <code>:id</code> matches the literal string <code>"bulk"</code> and the request goes to the
+        wrong controller (and fails ObjectId validation).</li>
+      <li><b>Validate the whole batch, then save.</b> Errors from all elements are collected and labelled
+        <code>tasks[2].title</code>, so the client fixes everything in one round trip.</li>
+      <li><b>The limit of 10</b> stops one request from turning into an unbounded write.</li>
+      <li><code>insertMany</code> is a single round trip to mongo instead of ten <code>save()</code> calls.</li>
+      <li><code>deleteMany</code> is filtered by <code>userId</code> as well as <code>_id</code>, so passing
+        another user's ids simply deletes nothing &mdash; <code>deletedCount</code> tells the truth.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================ 20 -->
+<section class="chapter" id="c20">
+  <h2><span class="badge">20</span> Schema detail</h2>
+  <p class="standfirst">What each schema option actually does at write time.</p>
+
+  <span class="tag">Package installed</span>
+  <div class="block"><p>Nothing new &mdash; mongoose from chapter 4.</p></div>
+
+  <span class="tag">Important code</span>
+  <pre><span class="c">// models/task.js</span>
+<span class="c">const</span> TaskSchema = mongoose.Schema({
+    title:  { type: String, required: <span class="c">true</span> },
+    status: {
+        type: String,
+        enum: ['not-started', 'pending', 'completed', 'in-progress'],
+        default: 'not-started'
+    },
+    dueDate: { type: Date, required: <span class="c">false</span> },
+    tags:    { type: [String], required: <span class="c">false</span> },
+    userId:  {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: <span class="c">true</span>
+    }
+}, { timestamps: <span class="c">true</span> });   <span class="c">// createdAt + updatedAt, auto on create/update</span>
+
+module.exports = mongoose.model('Task', TaskSchema);</pre>
+  <pre><span class="c">// models/user.js</span>
+email: { type: String, required: <span class="c">true</span>, unique: <span class="c">true</span>, lowercase: <span class="c">true</span>, trim: <span class="c">true</span> }</pre>
+
+  <span class="tag">Logic</span>
+  <div class="block">
+    <ul>
+      <li><b><code>enum</code></b> is the database's copy of the same rule the controller enforces. The
+        controller gives a friendly per-field message; the schema is the backstop for any write that skips
+        it.</li>
+      <li><b><code>ref: 'User'</code></b> documents the relationship and enables <code>.populate()</code>
+        later. It stores only the ObjectId &mdash; MongoDB does not enforce the foreign key, so a deleted user
+        leaves orphan tasks behind.</li>
+      <li><b><code>timestamps: true</code></b> adds and maintains <code>createdAt</code> /
+        <code>updatedAt</code>, which is why the update controller never sets <code>updatedAt</code> itself.</li>
+      <li><b><code>lowercase</code> and <code>trim</code></b> are setters that normalise on write, so
+        <code>"  Bob@X.com "</code> is stored as <code>bob@x.com</code> and login lookups match.</li>
+      <li><b><code>unique: true</code> is an index, not a validator.</b> MongoDB enforces it, and the duplicate
+        arrives as <code>code 11000</code> &mdash; which is why <code>normaliseError</code> maps it to a 409.
+        It also has to be built, hence <code>User.syncIndexes()</code> at startup.</li>
+      <li><b>Model name &rarr; collection name:</b> <code>'Task'</code> becomes <code>tasks</code>, lowercased
+        and pluralised.</li>
+      <li>Validators run on <code>save()</code> and, for updates, only when you pass
+        <code>{ runValidators: true }</code> &mdash; which the update controller does.</li>
+    </ul>
+  </div>
+
+  <blockquote><p>Still to do: real indexes on the fields we filter and sort by (<code>userId</code>,
+  <code>status</code>, <code>dueDate</code>). Right now every list query is a collection scan.</p></blockquote>
+</section>
+
+<!-- ============================================================ remaining -->
+<section class="chapter" id="remaining">
+  <h2><span class="badge">&mdash;</span> What is left</h2>
+  <p class="standfirst">Everything in the code is now written up. What follows is not built yet.</p>
+
+  <h3>Not built yet</h3>
+  <table>
+    <tr><th style="width:40px">#</th><th>Topic</th><th>Note</th></tr>
+    <tr><td>1</td><td>Pagination</td><td><code>?page=1&amp;limit=10</code> &mdash; real APIs never return all rows</td></tr>
+    <tr><td>2</td><td>MongoDB indexes</td><td>index <code>userId</code>, <code>status</code>, <code>dueDate</code> on tasks</td></tr>
+    <tr><td>3</td><td>Role authorization</td><td>the <code>role</code> field exists but nothing checks it yet</td></tr>
+    <tr><td>4</td><td>Escape <code>?search</code> regex</td><td>user input goes straight into <code>$regex</code></td></tr>
+    <tr><td>5</td><td>Caching</td><td>in-memory first, then Redis</td></tr>
+    <tr><td>6</td><td>File uploads</td><td><code>multer</code>, attachments on tasks</td></tr>
+    <tr><td>7</td><td>Tests</td><td>Supertest &mdash; auth, CRUD, ownership</td></tr>
+    <tr><td>8</td><td>Deploy + CI/CD</td><td>Atlas, host, GitHub Actions</td></tr>
+  </table>
+</section>
+
+<footer class="foot">
+  <span>The Node Gazette &mdash; Revision Notes I</span>
+  <span>Source: revision-1.md</span>
+  <span><a class="top" href="#top">&uarr; back to top</a></span>
+</footer>
+
+</div>
+</body>
+</html>

@@ -52,7 +52,8 @@ app.use(cors({
         if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
-            callback(new Error('Not allowed by CORS'));
+            // callback(new Error('Not allowed by CORS'));
+            callback(new AppError('Not allowed by CORS', 403));
         }
     },
     credentials: true,
@@ -81,6 +82,33 @@ app.get('/health', (req, res) => {
         uptime: Math.floor(process.uptime())
     });
 });
+
+// Interactive docs, generated from the @openapi comments in routes/*.js.
+// Unversioned like /health — it describes the whole server, not one API contract.
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./docs/swagger');
+
+// Swagger UI ships an inline init script and inline styles, which the global
+// helmet CSP blocks. Relax it on this path only instead of app-wide.
+const docsSecurityHeaders = helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", 'data:']
+        }
+    }
+});
+
+app.use('/api-docs', docsSecurityHeaders, swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+    customSiteTitle: 'Todo API — docs',
+    // keep the pasted token across page reloads
+    swaggerOptions: { persistAuthorization: true }
+}));
+
+// the raw spec, for Postman/Insomnia import and client generators
+app.get('/api-docs.json', (req, res) => res.json(swaggerSpec));
 
 // API versioning — the prefix lives in one place so adding /api/v2 later
 // means one more mount, not edits scattered across route files.

