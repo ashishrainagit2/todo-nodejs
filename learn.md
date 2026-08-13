@@ -3111,7 +3111,7 @@ The runtime everything else sits on. The guides matter more than the reference h
 | **Learn → "The Node.js Event Loop, Timers, and process.nextTick()"** | The single most valuable page for a backend dev. Phases, microtasks, why order surprises you | 🔴 |
 | **Learn → "Don't Block the Event Loop"** | The practical consequence: one slow synchronous line stalls every request | 🔴 |
 | [`process`](https://nodejs.org/api/process.html) | `env`, exit codes, `SIGTERM`, `unhandledRejection` — the graceful-shutdown material from [§16.1](#161-architecting-unbreakable-nodejs-applications) | 🔴 |
-| [`path`](https://nodejs.org/api/path.html) | Why `__dirname` + `path.join` beats a bare `'public'` string (see `revision-1.md`) | 🔴 |
+| [`path`](https://nodejs.org/api/path.html) | Why `__dirname` + `path.join` beats a bare `'public'` string (see [`revison1.html`](revison1.html)) | 🔴 |
 | [`events`](https://nodejs.org/api/events.html) | `EventEmitter` is the pattern under streams, sockets and Mongoose connections | 🟡 |
 | [`stream`](https://nodejs.org/api/stream.html) | Where backpressure is actually defined ([§16.5](#165-surviving-traffic-spikes-with-backpressure)) | 🟡 |
 | [`fs`](https://nodejs.org/api/fs.html) | Read the **promises** API; note which calls have `Sync` twins and avoid them at runtime | 🟡 |
