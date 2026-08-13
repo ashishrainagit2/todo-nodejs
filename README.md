@@ -798,7 +798,38 @@ App     → Payment Gateway → Bank / card network
 
 ## API performance & monitoring
 
-One place for **speed** (respond fast) and **observability** (know what broke in production). Topics below map to sections 4–7 in the learning path; implement in [`todo.md`](todo.md) after auth and structured errors.
+One place for **speed** (respond fast) and **observability** (know what broke in production). Topics below map to [`learn.md` §15](learn.md#15-api-performance--observability--the-vocabulary-and-the-loop). Implement remaining items in [`todo.md`](todo.md) after auth and structured errors.
+
+**Logging is observability** — it is one of the three pillars (logs, metrics, traces), not the whole discipline. Health checks, error tracking, and alerting sit under the same umbrella.
+
+### Observability — implemented vs remaining
+
+| Piece | What it answers | Status | Where |
+|-------|-----------------|--------|-------|
+| **Request logging** (logs pillar) | What happened to *this* request? | ✅ | `morgan` in `app.js` — stdout always; `logs/access.log` in dev only. [`learn.md` §12](learn.md#12-request-logging-morgan--health-check) |
+| **Health / readiness** | Is this instance fit for traffic? | ✅ | `GET /health` — 200 / 503 from `mongoose.connection.readyState` |
+| **Error log on unknown 500s** | What was the stack? | 💡 | `console.error` in the global handler — not grouped, not alerted |
+| **Structured logs** | Searchable JSON with levels | ❌ | `winston` / `pino` — replace `console.*` before deploy |
+| **Metrics** (metrics pillar) | Is `GET /tasks` slower this week? | ❌ | `prom-client` + `GET /metrics` (p50 / p95 / p99). Duration in morgan is per-request, not an aggregate |
+| **Traces** (traces pillar) | Of 800 ms, how much was auth vs Mongo? | ❌ | OpenTelemetry / APM product |
+| **Error tracking** | Group crashes, notify | ❌ | Sentry (or similar) |
+| **Alerting** | Page a human when an SLI breaks | ❌ | Hosting dashboard or APM — this is **monitoring**, which uses the data above |
+| **Profiling** | Event-loop lag, heap, CPU | ❌ | After you have real traffic; related to [`learn.md` §19](learn.md#19-how-node-serves-many-users--one-thread-cluster-worker-threads) |
+| **Uptime checks** | Probe `/health` from outside | ❌ | After deploy |
+
+**Done in this Todo API:**
+
+1. ✅ **`morgan`** — `dev` locally, `combined` in production, both to stdout. Extra `combined` file only when not production.
+2. ✅ **`GET /health`** — skipped by morgan so probes do not bury real traffic.
+3. 💡 **Unhandled errors** printed with `console.error` (stderr); client sees a generic 500 in production.
+
+**Still to add (learning order):**
+
+1. **`winston` / `pino`** — JSON logs with levels; keep morgan or replace it.
+2. **`prom-client` + `GET /metrics`** — sit outside `/api/v1`, not public in production. See [`learn.md` §15](learn.md#15-api-performance--observability--the-vocabulary-and-the-loop).
+3. **Sentry** (or similar) — replace raw `console.error` once deployed.
+4. **Alerting** — error rate or p95 latency, on the hosting dashboard or APM.
+5. **Tracing** — when more than one service exists; not needed for a single Express process yet.
 
 ### Performance (make the API faster)
 
@@ -813,25 +844,7 @@ One place for **speed** (respond fast) and **observability** (know what broke in
 
 **Order to add in this project:** pagination → indexes on `tasks` → optional cache for `GET /tasks` → compression at deploy.
 
-### Monitoring (see what the API is doing)
-
-| Topic | What it does | Status | Where to learn |
-|-------|--------------|--------|----------------|
-| **Request logging** | `morgan` — method, URL, status, response time | ✅ | [`learn.md` §12](learn.md#12-request-logging-morgan--health-check) |
-| **Structured logs** | `winston` — JSON logs with levels (info, warn, error) for prod | ❌ | [§4](#4️⃣-error-handling--logging) |
-| **Health check** | `GET /health` → `{ status, db, uptime }`, 503 when DB is down | ✅ | [`learn.md` §12](learn.md#12-request-logging-morgan--health-check) |
-| **Error tracking** | Sentry / similar — capture stack traces from production | ❌ | After deploy |
-| **APM / metrics** | Datadog, New Relic, Prometheus — latency, throughput, slow queries | ❌ | Production / team tooling |
-| **Alerting** | Notify when error rate or latency spikes | ❌ | With hosting or APM |
-
-**Minimal stack for this Todo API (learning):**
-
-1. ✅ **`morgan`** in `app.js` — `dev` locally, `combined` + `logs/access.log`; production logs to stdout only.
-2. ✅ **`GET /health`** — `mongoose.connection.readyState`, 200 / 503, skipped by the logger.
-3. **`winston`** (next) — replace `console.log` in the error handler before deploy.
-4. **Hosting dashboard** (Render/Railway/AWS/Azure) — CPU, memory, restarts after you deploy.
-
-**Not in scope yet:** full APM dashboards, distributed tracing, custom metrics — add when the API is live and you need to debug real traffic.
+Performance and observability are related but not the same list. Indexes make the API faster. Metrics *tell you* it got faster.
 
 ---
 
