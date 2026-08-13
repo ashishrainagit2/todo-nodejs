@@ -357,7 +357,7 @@ Harder surfaces in the same repo if you want more: the workflows engine, and the
 
 ### 5. Read the middleware you already `require()`
 
-Small repos, exact topic match, and you have already documented their behaviour in `revision-1.md`:
+Small repos, exact topic match, and you have already documented their behaviour in [`revison1.html`](revison1.html):
 
 | Package | Why read the source |
 |---|---|
