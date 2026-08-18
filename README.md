@@ -60,36 +60,51 @@ All resource routes are versioned — `/api/v1/tasks`, `/api/v1/auth/login`. `GE
 - ✅ Health check — `GET /health` → **200** `{ status, db, uptime }`, **503** when MongoDB is not connected
 - ✅ API versioning — all routes under `/api/v1` via `routes/v1.js` + one prefix in `app.js` (see [`learn.md` §13](learn.md#13-api-versioning--apiv1))
 - ✅ Pagination — `GET /api/v1/tasks?page=&limit=` returns `{ data, page, limit, total, totalPages }` (default page 1, limit 10, max 100)
-
----
-
-## 💡 In progress
-
-- 💡 Date filters (`?dueBefore=`, overdue tasks)
-- 💡 **`AppError` + consistent error JSON** — steps 1–3 done; shape + `AppError` class still pending
+- ✅ `AppError` + consistent error JSON — `{ success, status, message, errors[] }`; unknown 500s hidden in production
+- ✅ Malformed JSON body → **400**
+- ✅ Swagger — `/api-docs` and `/api-docs.json`
+- ✅ Cluster entry — `npm run start:cluster` → `server.js` (in-memory rate limit still per-worker)
 
 ---
 
 ## ❌ Pending
 
-- ❌ Mark complete shortcut — `PATCH /tasks/:id/complete`
-- ❌ Frontend (React / Next.js — last)
-- ❌ File uploads for attachments
-- ❌ Richer schema (subTasks, comments as objects)
-- ❌ Tests (Jest / Supertest)
-- ❌ Deploy (Render, Railway, etc.)
+Accurate against the code (not old checklists). Next three: **indexes → escape search regex → tests**.
 
-### Error handling (goal: exact errors on every failure)
+### API features
 
-- ❌ `AppError` class — `throw new AppError('Task not found', 404)` + one handler
-- ❌ Consistent error JSON shape — `{ success, status, message, errors[] }`
-- ✅ Field-level validation errors — `{ field: "title", message: "..." }` on create / update / bulk (bulk labels them `tasks[2].title`)
-- ✅ `409 Conflict` for duplicate email — `findOne` + `next(err)` **409**, MongoDB `11000` backup, unique index via `syncIndexes()`
-- ❌ `403 Forbidden` for role-based routes (admin vs user)
-- ✅ Invalid MongoDB id format → `400` — global handler, `CastError`
-- ❌ Malformed JSON body → clear `400` message
-- ❌ Production: hide internal `500` details from client (log server-side only)
-- ✅ Map Mongoose `ValidationError` → readable **400** messages (global handler)
+- Date filters (`?dueBefore=`, overdue)
+- `PATCH /tasks/:id/complete`
+- Role checks (`role` exists, never used → no 403)
+- Escape `?search` for `$regex`
+- File uploads (`multer`; `attachments` is still `[String]`)
+- Nested subTasks / comments as real objects
+
+### Database / speed
+
+- Indexes on `userId`, `status`, `dueDate` (or `{ userId, createdAt }`)
+- In-memory cache, then Redis
+- `.lean()` / `.select()` on list
+- Response compression
+
+### Hardening
+
+- Redis-backed rate limit (in-memory breaks under cluster)
+- `app.set('trust proxy', 1)` when anything sits in front
+- Request timeout
+- Structured logs (`pino` / `winston`)
+- Metrics, tracing, Sentry, alerts
+
+### Quality / ship
+
+- Tests (Supertest) — `npm test` is still a stub
+- MongoDB Atlas + deploy (Render / Railway / Fly)
+- Prod env vars, HTTPS
+- CI (GitHub Actions: test on PR, then auto-deploy)
+
+### Frontend (last)
+
+- React / Next.js client, token on `Authorization`, error/loading UI
 
 ---
 
@@ -935,13 +950,7 @@ Work through these via [`todo.md`](todo.md) — backend breadth first, then host
 
 ## Todo API features still pending
 
-*(Separate from backend concepts — add when ready)*
-
-- ❌ Date filters / overdue
-- ❌ Mark complete shortcut
-- ❌ Frontend (Next.js — last)
-- ❌ File uploads
-- ❌ Richer schema (subTasks as objects)
+See the grouped list under [❌ Pending](#-pending) at the top of this file.
 
 ---
 
