@@ -1,22 +1,26 @@
 const cluster = require('cluster');
 const os = require('os');
 
+require('dotenv/config');
+
+const PORT = process.env.PORT || 3005;
 const numCPUs = os.cpus().length;
-console.log(`Number of CPUs: ${numCPUs}`);
 
 if (cluster.isPrimary) {
-    console.log(`Master process is running`);
+    console.log(`Master ${process.pid} forking ${numCPUs} workers`);
+
     for (let i = 0; i < numCPUs; i++) {
         cluster.fork();
     }
-} else {
-    console.log(`Worker process is running`);
-    const express = require('express');
-    const app = express();
-    app.get('/', (req, res) => {
-        res.send(`Hello World ${process.pid} ${cluster.worker.id}`);
+
+    cluster.on('exit', (worker) => {
+        console.log(`Worker ${worker.process.pid} died — forking a replacement`);
+        cluster.fork();
     });
-    app.listen(8000, () => {
-        console.log(`Server is running on port 8000 ${process.pid}`);
+} else {
+    const app = require('./app');
+
+    app.listen(PORT, () => {
+        console.log(`Worker ${process.pid} listening on ${PORT}`);
     });
 }
