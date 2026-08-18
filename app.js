@@ -201,6 +201,12 @@ mongoose.connect(process.env.DB_CONNECTION)
     })
     .catch((err) => console.error('Database connection error:', err.message));
 
-app.listen(process.env.PORT, () => {
-    console.log(`server running in ${process.env.PORT}`)
-})
+// Listen only when this file is the process entry (`npm start` → app.js).
+// Cluster workers require() this module and call listen() from server.js instead.
+if (require.main === module) {
+    app.listen(process.env.PORT, () => {
+        console.log(`server running in ${process.env.PORT}`);
+    });
+}
+
+module.exports = app;
