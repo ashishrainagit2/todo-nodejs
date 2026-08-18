@@ -22,7 +22,7 @@ router.use(protect);
  *   get:
  *     tags: [Tasks]
  *     summary: List your tasks
- *     description: Returns only tasks owned by the authenticated user. Unknown sort fields are ignored rather than rejected, falling back to newest first.
+ *     description: Returns only tasks owned by the authenticated user. Unknown sort fields are ignored rather than rejected, falling back to newest first. Results are paged (`page`, `limit`); defaults are page 1 and 10 items, max 100.
  *     parameters:
  *       - name: status
  *         in: query
@@ -51,15 +51,47 @@ router.use(protect);
  *         schema:
  *           type: string
  *           enum: [createdAt, -createdAt, updatedAt, -updatedAt, dueDate, -dueDate, title, -title, priority, -priority, status, -status]
+ *       - name: page
+ *         in: query
+ *         description: 1-based page number. Defaults to 1.
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           default: 1
+ *       - name: limit
+ *         in: query
+ *         description: Page size. Defaults to 10, maximum 100.
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *           default: 10
  *     responses:
  *       200:
- *         description: Matching tasks, newest first unless sorted otherwise
+ *         description: One page of matching tasks, newest first unless sorted otherwise
  *         content:
  *           application/json:
  *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Task'
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Task'
+ *                 page:
+ *                   type: integer
+ *                   example: 1
+ *                 limit:
+ *                   type: integer
+ *                   example: 10
+ *                 total:
+ *                   type: integer
+ *                   example: 47
+ *                 totalPages:
+ *                   type: integer
+ *                   example: 5
+ *       400:
+ *         $ref: '#/components/responses/ValidationFailed'
  *       401:
  *         $ref: '#/components/responses/Unauthorized'
  *       429:

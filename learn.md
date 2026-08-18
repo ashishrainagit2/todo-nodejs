@@ -2958,7 +2958,7 @@ Roughly in the order they pay off:
 |-------|------------|--------------|
 | **Measurement** | Metrics endpoint, APM, tracing, load tests | ❌ only morgan's timing column |
 | **Database** | Indexes, query plans (`.explain()`), projections, connection pooling | ❌ see below |
-| **Response shaping** | Pagination, `.select()`, `.lean()`, gzip compression | ❌ none |
+| **Response shaping** | Pagination, `.select()`, `.lean()`, gzip compression | ✅ pagination (`page`/`limit`); ❌ `.select()`, `.lean()`, gzip |
 | **Caching** | HTTP `ETag` / `Cache-Control`, in-memory, Redis, CDN | ❌ none |
 | **Protection** | Rate limiting, request timeouts, circuit breakers | ✅ rate limiting only |
 | **Scale-out** | Node `cluster`, load balancer, HTTP keep-alive | ❌ not needed yet |
@@ -2985,7 +2985,7 @@ index used: no
 | Problem | Why it matters | Fix |
 |---------|----------------|-----|
 | **No index on `userId`** | Every list request scans the **entire** collection — including other users' tasks. Cost grows linearly with the collection | Compound index `{ userId: 1, createdAt: -1 }` — serves the filter **and** the sort |
-| **No pagination** | Response grows without bound; MongoDB's in-memory sort has a hard **32 MB** limit, so eventually it *errors*, not just slows | `?page` + `?limit` → `.skip()` / `.limit()` |
+| **Pagination** | Done — `?page` + `?limit` → `.skip()` / `.limit()`, envelope `{ data, page, limit, total, totalPages }` | Skip still walks discarded docs; an index makes the remaining scan cheaper |
 | **`$regex` search** | Unanchored + `$options: 'i'` **cannot use a normal index**, ever — always a scan | MongoDB **text index** (different query syntax) or Atlas Search |
 | **Full documents returned** | List views rarely need `comments`, `subTasks`, `attachments` | `.select()` + `.lean()` for read-only responses |
 
@@ -3004,7 +3004,7 @@ Do the loop properly rather than adding the index blind:
 | **3. Baseline load test** (`autocannon`) | Record p95 **before** touching anything |
 | **4. Add the compound index** | The single biggest win |
 | **5. Re-run the same load test** | A before/after number **you produced** — this is the part that teaches |
-| **6. Then pagination, `.lean()`, compression** | Each one measured the same way |
+| **6. Then `.lean()`, compression** | Each one measured the same way |
 
 **Note:** `/metrics` should sit **outside** `/api/v1` for the same reason as `/health` — it describes the server, not the API contract (see [§13](#13-api-versioning--apiv1)). It also shouldn't be publicly readable in production.
 

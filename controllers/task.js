@@ -3,7 +3,28 @@ const AppError = require('../utils/AppError');
 
 exports.getTasks = async (req, res, next) => {
     try {
+        
         const filter = { userId: req.user._id };
+
+        const DEFAULT_LIMIT = 10;
+        const MAX_LIMIT = 100;
+
+        const page = req.query.page === undefined ? 1 : Number(req.query.page);
+        const limit = req.query.limit === undefined ? DEFAULT_LIMIT : Number(req.query.limit);
+
+        if (!Number.isInteger(page) || page < 1) {
+            throw new AppError('page must be a positive integer', 400, [
+                { field: 'page', message: 'page must be a positive integer' }
+            ]);
+        }
+
+        if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
+            throw new AppError(`limit must be an integer between 1 and ${MAX_LIMIT}`, 400, [
+                { field: 'limit', message: `limit must be an integer between 1 and ${MAX_LIMIT}` }
+            ]);
+        }
+
+        const skip = (page - 1) * limit;
 
         if (req.query.status) filter.status = req.query.status;
         if (req.query.priority) filter.priority = req.query.priority;
@@ -29,8 +50,18 @@ exports.getTasks = async (req, res, next) => {
             }
         }
 
-        const tasks = await Task.find(filter).sort(sort);
-        res.json(tasks);
+        const [tasks, total] = await Promise.all([
+            Task.find(filter).sort(sort).skip(skip).limit(limit),
+            Task.countDocuments(filter)
+        ]);
+
+        res.json({
+            data: tasks,
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit) || 0
+        });
     } catch (e) {
         next(e);
     }

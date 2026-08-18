@@ -27,7 +27,7 @@ One topic at a time. Pick a row, implement, test in Postman, move on.
 | 5 | `.gitignore` + `.env.example` | Secrets safe, template for others | ✅ |
 | 6 | Bulk create tasks | `POST /tasks/bulk` with userId | ✅ |
 | 7 | Input validation | `express-validator` or Joi — reject bad body early | ❌ |
-| 8 | Pagination | `?page=1&limit=10` on GET /tasks | ❌ |
+| 8 | Pagination | `?page=&limit=` on GET /tasks — `{ data, page, limit, total, totalPages }` | ✅ |
 | 9 | Date filters | `?dueBefore=`, overdue tasks | ❌ |
 | 10 | Auto `updatedAt` | Schema `{ timestamps: true }` + allowlisted PATCH | ✅ |
 | 11 | Mark complete shortcut | `PATCH /tasks/:id/complete` | ❌ |
@@ -93,10 +93,12 @@ One topic at a time. Pick a row, implement, test in Postman, move on.
 | 1 | ✅ Input validation (#7) | Safer API before more features |
 | 2 | ✅ Helmet + rate limit (#14, #15) | Quick security wins |
 | 3 | ✅ Health check + morgan (#16, #17) | Production debugging basics |
-| 4 | Structured errors — `AppError` (#18) | One error shape across every route |
-| 5 | API versioning (#13) → then Swagger docs | Version before documenting, or the spec gets rewritten |
-| 6 | Pagination (#8) | Real apps never return all rows |
-| 7 | Supertest (#24) | Lock in what you built before deploy |
+| 4 | ✅ Structured errors — `AppError` (#18) | One error shape across every route |
+| 5 | ✅ API versioning (#13) + Swagger | Version before documenting |
+| 6 | ✅ Pagination (#8) | Real apps never return all rows |
+| 7 | MongoDB indexes (#19) | Next real performance win |
+| 8 | Escape `?search` regex (#26) | User input must not be raw `$regex` |
+| 9 | Supertest (#24) | Lock in what you built before deploy |
 
 ---
 
