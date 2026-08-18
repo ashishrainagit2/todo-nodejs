@@ -1898,7 +1898,11 @@ error handler with 3 arguments    → treated as normal middleware, never runs</
     <span class="c">if</span> (allowedSortFields.includes(field)) sort = req.query.sort;
 }
 
-<span class="c">const</span> tasks = <span class="c">await</span> Task.find(filter).sort(sort);</pre>
+<span class="c">const</span> skip = (page - 1) * limit;
+<span class="c">const</span> [tasks, total] = <span class="c">await</span> Promise.all([
+    Task.find(filter).sort(sort).skip(skip).limit(limit),
+    Task.countDocuments(filter)
+]);</pre>
 
   <span class="tag">Logic</span>
   <div class="block">
@@ -1912,13 +1916,15 @@ error handler with 3 arguments    → treated as normal middleware, never runs</
       <li>The sort <b>allowlist</b> exists so a client cannot sort by an arbitrary field and force an expensive
         unindexed scan. Anything unknown silently falls back to <code>-createdAt</code> (newest first).</li>
       <li><code>-field</code> means descending, so <code>?sort=-dueDate</code> works.</li>
+      <li><b>Pagination</b> is 1-based: <code>page</code> defaults to 1, <code>limit</code> to 10 (max 100).
+        Invalid values are 400. The response is
+        <code>{ data, page, limit, total, totalPages }</code>, not a bare array.</li>
     </ul>
-    <pre>GET /tasks?status=pending&amp;priority=high&amp;tag=work&amp;search=milk&amp;sort=-dueDate</pre>
+    <pre>GET /tasks?status=pending&amp;priority=high&amp;tag=work&amp;search=milk&amp;sort=-dueDate&amp;page=1&amp;limit=10</pre>
   </div>
 
-  <blockquote><p>Two known gaps: no pagination yet, so this returns every matching row, and
-  <code>search</code> goes straight into <code>$regex</code> unescaped &mdash; a user typing <code>(</code>
-  breaks the query. Both are on the todo list.</p></blockquote>
+  <blockquote><p>Known gap: <code>search</code> goes straight into <code>$regex</code> unescaped &mdash; a user
+  typing <code>(</code> breaks the query. Escape it before it hits mongo.</p></blockquote>
 </section>
 
 <!-- ============================================================ 19 -->
@@ -2037,14 +2043,13 @@ email: { type: String, required: <span class="c">true</span>, unique: <span clas
   <h3>Not built yet</h3>
   <table>
     <tr><th style="width:40px">#</th><th>Topic</th><th>Note</th></tr>
-    <tr><td>1</td><td>Pagination</td><td><code>?page=1&amp;limit=10</code> &mdash; real APIs never return all rows</td></tr>
-    <tr><td>2</td><td>MongoDB indexes</td><td>index <code>userId</code>, <code>status</code>, <code>dueDate</code> on tasks</td></tr>
-    <tr><td>3</td><td>Role authorization</td><td>the <code>role</code> field exists but nothing checks it yet</td></tr>
-    <tr><td>4</td><td>Escape <code>?search</code> regex</td><td>user input goes straight into <code>$regex</code></td></tr>
-    <tr><td>5</td><td>Caching</td><td>in-memory first, then Redis</td></tr>
-    <tr><td>6</td><td>File uploads</td><td><code>multer</code>, attachments on tasks</td></tr>
-    <tr><td>7</td><td>Tests</td><td>Supertest &mdash; auth, CRUD, ownership</td></tr>
-    <tr><td>8</td><td>Deploy + CI/CD</td><td>Atlas, host, GitHub Actions</td></tr>
+    <tr><td>1</td><td>MongoDB indexes</td><td>index <code>userId</code>, <code>status</code>, <code>dueDate</code> on tasks</td></tr>
+    <tr><td>2</td><td>Role authorization</td><td>the <code>role</code> field exists but nothing checks it yet</td></tr>
+    <tr><td>3</td><td>Escape <code>?search</code> regex</td><td>user input goes straight into <code>$regex</code></td></tr>
+    <tr><td>4</td><td>Caching</td><td>in-memory first, then Redis</td></tr>
+    <tr><td>5</td><td>File uploads</td><td><code>multer</code>, attachments on tasks</td></tr>
+    <tr><td>6</td><td>Tests</td><td>Supertest &mdash; auth, CRUD, ownership</td></tr>
+    <tr><td>7</td><td>Deploy + CI/CD</td><td>Atlas, host, GitHub Actions</td></tr>
   </table>
 </section>
 

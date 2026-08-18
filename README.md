@@ -59,6 +59,7 @@ All resource routes are versioned — `/api/v1/tasks`, `/api/v1/auth/login`. `GE
 - ✅ Request logging — `morgan` (`dev` locally, `combined` + `logs/access.log` in dev; stdout only in production), `/health` skipped
 - ✅ Health check — `GET /health` → **200** `{ status, db, uptime }`, **503** when MongoDB is not connected
 - ✅ API versioning — all routes under `/api/v1` via `routes/v1.js` + one prefix in `app.js` (see [`learn.md` §13](learn.md#13-api-versioning--apiv1))
+- ✅ Pagination — `GET /api/v1/tasks?page=&limit=` returns `{ data, page, limit, total, totalPages }` (default page 1, limit 10, max 100)
 
 ---
 
@@ -71,7 +72,6 @@ All resource routes are versioned — `/api/v1/tasks`, `/api/v1/auth/login`. `GE
 
 ## ❌ Pending
 
-- ❌ Pagination — `?page=1&limit=10`
 - ❌ Mark complete shortcut — `PATCH /tasks/:id/complete`
 - ❌ Frontend (React / Next.js — last)
 - ❌ File uploads for attachments
@@ -101,7 +101,7 @@ Prefix every route below with `/api/v1`.
 |--------|-----|--------|
 | POST | `/api/v1/auth/register` | Create account |
 | POST | `/api/v1/auth/login` | Get JWT |
-| GET | `/api/v1/tasks` | Get all (filter, search, sort) |
+| GET | `/api/v1/tasks` | Get a page of tasks (filter, search, sort, `?page=&limit=`) |
 | GET | `/api/v1/tasks/:id` | Get one |
 | POST | `/api/v1/tasks` | Create |
 | POST | `/api/v1/tasks/bulk` | Create many (max 10) |
@@ -113,7 +113,7 @@ Prefix every route below with `/api/v1`.
 ### Examples
 
 ```
-GET  /api/v1/tasks?status=pending&priority=high&sort=-dueDate
+GET  /api/v1/tasks?status=pending&priority=high&sort=-dueDate&page=1&limit=10
 GET  /api/v1/tasks?search=meeting&tag=work
 POST /api/v1/tasks          (JSON body)
 PATCH /api/v1/tasks/:id     (JSON body)
@@ -426,7 +426,7 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 | Clean URLs | `/tasks/:id` not `/getTask/:id` | ✅ |
 | Status codes | 200, 201, 400, 401, 404, 409, 429, 500 — mapped in global handler | ✅ steps 1–3 |
 | **API versioning** | `/api/v1/tasks` so you can change v2 without breaking clients | ✅ `routes/v1.js` + one prefix in `app.js` |
-| Pagination | `?page=1&limit=10` — don't return everything at once | ❌ |
+| Pagination | `?page=1&limit=10` — `{ data, page, limit, total, totalPages }`, max 100 | ✅ |
 | **REST vs WebSocket vs gRPC** | HTTP JSON vs live channel vs service-to-service RPC | ❌ concept — see [WebSocket & gRPC](#websocket--grpc-vs-rest) |
 
 ---
@@ -835,14 +835,14 @@ One place for **speed** (respond fast) and **observability** (know what broke in
 
 | Topic | What it does | Status | Where to learn |
 |-------|--------------|--------|----------------|
-| **Pagination** | `?page=1&limit=20` — don't return 10k tasks at once | ❌ | Step 10 in [Suggested order](#suggested-order-do-one-at-a-time) |
+| **Pagination** | `?page=&limit=` — `{ data, page, limit, total, totalPages }`, default 10, max 100 | ✅ | `controllers/task.js` `getTasks` |
 | **MongoDB indexes** | Index `userId`, `status`, `createdAt` — filters stay fast as data grows | ❌ | [§5 Database & performance](#5️⃣-database--performance) |
 | **Query optimization** | `.select()`, avoid unindexed regex on huge collections | 💡 | [§5](#5️⃣-database--performance) |
 | **Response compression** | `compression` middleware — smaller JSON over the wire | ❌ | Deploy / hardening |
 | **Caching** | Cache hot reads (Redis in prod); invalidate on write | ❌ | [§6 Caching](#6️⃣-caching) |
 | **Rate limiting** | Protect DB + auth from abuse | ✅ | [Rate limiting](#rate-limiting) |
 
-**Order to add in this project:** pagination → indexes on `tasks` → optional cache for `GET /tasks` → compression at deploy.
+**Order to add in this project:** indexes on `tasks` → optional cache for `GET /tasks` → compression at deploy.
 
 Performance and observability are related but not the same list. Indexes make the API faster. Metrics *tell you* it got faster.
 
@@ -898,7 +898,7 @@ Performance and observability are related but not the same list. Indexes make th
 | **No `AppError`** | Task write routes return `{ message, errors[] }`; everything else is still `{ message }` only — no single error class or shape |
 | **No MongoDB indexes on tasks** | Slow queries as data grows — filter/search on large `tasks` collection lags |
 | **No structured (JSON) logs** | `morgan` gives a request trail, but plain text — `winston`/`pino` levels + JSON still pending for searchable production logs |
-| **No pagination / caching** | `GET /tasks` gets slower and heavier as every user's tasks accumulate |
+| **No pagination / caching** | Pagination is in; no cache yet — repeats of the same `GET /tasks` still hit Mongo every time |
 | **Role auth not implemented** | `role` field exists but unused — admin vs user authorization missing |
 | **Malformed JSON / prod 500 hiding** | Bad JSON body and internal error detail hiding still pending |
 
@@ -937,7 +937,6 @@ Work through these via [`todo.md`](todo.md) — backend breadth first, then host
 
 *(Separate from backend concepts — add when ready)*
 
-- ❌ Pagination
 - ❌ Date filters / overdue
 - ❌ Mark complete shortcut
 - ❌ Frontend (Next.js — last)
