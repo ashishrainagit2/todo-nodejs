@@ -5,7 +5,7 @@ const windowMs = Number(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000;
 
 // hand off to the global handler so 429s use the same shape as every other error
 const jsonLimitHandler = (req, res, next) => {
-    next(new AppError('Too many requests, please try again later', 429));
+    next(new AppError('Too many requests, please try again later', 429, [], 'ERR_RATE_LIMIT'));
 };
 
 // General API — per IP, all /tasks routes

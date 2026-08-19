@@ -10,7 +10,7 @@ exports.protect = async (req, res, next) => {
     }
 
     if (!token) {
-        return next(new AppError('Not authorized, no token', 401));
+        return next(new AppError('Not authorized, no token', 401, [], 'ERR_NO_TOKEN'));
     }
 
     let decoded;
@@ -20,13 +20,13 @@ exports.protect = async (req, res, next) => {
         // { userId: '6a7b242f3b7877edcc1769e4', iat: 1786455087, exp: 1787059887 }
     } catch (e) {
         // expired or tampered token — never a server bug
-        return next(new AppError('Not authorized, invalid token', 401));
+        return next(new AppError('Not authorized, invalid token', 401, [], 'ERR_INVALID_TOKEN'));
     }
 
     try {
         const user = await User.findById(decoded.userId).select('-password');
         if (!user) {
-            throw new AppError('User no longer exists', 401);
+            throw new AppError('User no longer exists', 401, [], 'ERR_USER_GONE');
         }
 
         req.user = user;

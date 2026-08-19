@@ -1,0 +1,16 @@
+---
+description: Put comparison tables in copyable code blocks, not markdown tables
+alwaysApply: true
+---
+
+# Copyable tables
+
+Never use GitHub-flavored markdown tables in chat replies. They do not copy cleanly.
+
+Put every table inside a fenced code block so the user can copy it in one click. Prefer a markdown table inside the fence, or an aligned text table. Keep a blank line before and after the fence.
+
+```
+| Kind | Example | Status |
+|---|---|---|
+| Bad input | invalid email | 400 |
+```

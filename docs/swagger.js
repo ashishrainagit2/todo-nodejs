@@ -155,6 +155,11 @@ const components = {
                 success: { type: 'boolean', example: false },
                 status: { type: 'integer', example: 404 },
                 message: { type: 'string', example: 'Task not found' },
+                code: {
+                    type: 'string',
+                    description: 'Stable machine contract. Do not parse message — it may change. Unknown bugs are ERR_INTERNAL.',
+                    example: 'ERR_TASK_NOT_FOUND'
+                },
                 errors: {
                     type: 'array',
                     items: { $ref: '#/components/schemas/FieldError' },
@@ -185,6 +190,7 @@ const components = {
                         success: false,
                         status: 400,
                         message: 'Validation failed',
+                        code: 'ERR_VALIDATION',
                         errors: [
                             { field: 'title', message: 'title must be a string between 3 and 100 characters' },
                             { field: 'description', message: 'description is required' }
@@ -198,7 +204,7 @@ const components = {
             content: {
                 'application/json': {
                     schema: { $ref: '#/components/schemas/Error' },
-                    example: { success: false, status: 401, message: 'Not authorized, no token' }
+                    example: { success: false, status: 401, message: 'Not authorized, no token', code: 'ERR_NO_TOKEN' }
                 }
             }
         },
@@ -207,7 +213,7 @@ const components = {
             content: {
                 'application/json': {
                     schema: { $ref: '#/components/schemas/Error' },
-                    example: { success: false, status: 404, message: 'Task not found' }
+                    example: { success: false, status: 404, message: 'Task not found', code: 'ERR_TASK_NOT_FOUND' }
                 }
             }
         },
@@ -219,7 +225,8 @@ const components = {
                     example: {
                         success: false,
                         status: 429,
-                        message: 'Too many requests, please try again later'
+                        message: 'Too many requests, please try again later',
+                        code: 'ERR_RATE_LIMIT'
                     }
                 }
             }
@@ -229,7 +236,7 @@ const components = {
             content: {
                 'application/json': {
                     schema: { $ref: '#/components/schemas/Error' },
-                    example: { success: false, status: 500, message: 'Something went wrong' }
+                    example: { success: false, status: 500, message: 'Something went wrong', code: 'ERR_INTERNAL' }
                 }
             }
         }
@@ -245,7 +252,7 @@ const options = {
             description: [
                 'Task manager with JWT auth. Every task is scoped to its owner, so one user can never read or modify another user\'s tasks.',
                 '',
-                '**Errors** all share one shape: `{ success, status, message, errors? }`.',
+                '**Errors** all share one shape: `{ success, status, message, code, errors? }`. `code` is the stable contract (e.g. `ERR_TASK_NOT_FOUND`); do not parse `message`.',
                 '',
                 '**To try a protected endpoint:** call `POST /auth/register`, then `POST /auth/login`, copy the `token`, and paste it into **Authorize** above.'
             ].join('\n')
