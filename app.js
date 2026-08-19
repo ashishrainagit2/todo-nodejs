@@ -94,6 +94,31 @@ app.get('/health', (req, res) => {
 // GET http://localhost:3005/error-lab?case=timeout
 // GET http://localhost:3005/error-lab?case=early
 // GET http://localhost:3005/error-lab?case=stack
+// GET http://localhost:3005/error-lab?case=weather-lost   (wrap without cause — crime scene gone)
+// GET http://localhost:3005/error-lab?case=weather-cause  (wrap with cause — both stacks)
+
+function printCauseChain(err) {
+    let depth = 0;
+    let cur = err;
+    while (cur) {
+        console.error(`\n--- chain[${depth}] ${cur.name || 'Error'}: ${cur.message}`);
+        console.error(cur.stack);
+        cur = cur.cause;
+        depth += 1;
+    }
+}
+
+// Stand-in for OpenWeather: hit a closed port so Node throws a real network error
+// (ECONNREFUSED), not an HTTP 4xx. Same lesson as a dropped TCP connection to weather.
+async function callFakeWeatherApi() {
+    const res = await fetch('http://127.0.0.1:1/v1/forecast?q=Delhi', {
+        signal: AbortSignal.timeout(3000)
+    });
+    if (!res.ok) {
+        throw new Error(`weather HTTP ${res.status}`);
+    }
+    return res.json();
+}
 
 app.get('/error-lab', async (req, res, next) => {
     const kind = req.query.case;
@@ -210,8 +235,37 @@ app.get('/error-lab', async (req, res, next) => {
             // GET http://localhost:3005/error-lab?case=stack
         }
 
+        if (kind === 'weather-lost') {
+            try {
+                await callFakeWeatherApi();
+            } catch (orig) {
+                console.error('ORIGINAL network error (we will THROW IT AWAY):');
+                console.error(orig);
+                throw new AppError(
+                    'Weather service unavailable',
+                    503,
+                    [],
+                    'ERR_WEATHER_UNAVAILABLE'
+                );
+            }
+        }
+
+        if (kind === 'weather-cause') {
+            try {
+                await callFakeWeatherApi();
+            } catch (orig) {
+                throw new AppError(
+                    'Weather service unavailable',
+                    503,
+                    [],
+                    'ERR_WEATHER_UNAVAILABLE',
+                    orig
+                );
+            }
+        }
+
         res.json({
-            usage: 'GET /error-lab?case=sync|await|float|timeout|early|stack',
+            usage: 'GET /error-lab?case=sync|await|float|timeout|early|stack|weather-lost|weather-cause',
             proof: 'This whole handler is inside try/catch. sync+await → "LAB CATCH RAN". float+timeout → catch silent, process dies. early → forgot await on SUCCESS, no crash.',
             cases: {
                 sync: 'throw in try → CATCH RUNS → JSON 500. Process lives.',
@@ -219,11 +273,17 @@ app.get('/error-lab', async (req, res, next) => {
                 float: 'forgot await → CATCH NEVER RUNS → crash anyway',
                 timeout: 'throw in setTimeout → CATCH NEVER RUNS → crash anyway',
                 early: 'forgot await on a SUCCESS → 200 too soon, process lives',
-                stack: 'compare error.stack with vs without Error.captureStackTrace'
+                stack: 'compare error.stack with vs without Error.captureStackTrace',
+                'weather-lost': 'fetch dead weather host, wrap in AppError WITHOUT cause. Client 503 clean. Log: only AppError stack — ECONNREFUSED gone.',
+                'weather-cause': 'same fetch, AppError WITH cause. Client still 503 clean. Log: AppError caused by undici/ECONNREFUSED (both stacks).'
             }
         });
     } catch (e) {
         console.error('LAB CATCH RAN ===>', e.message);
+        if (kind === 'weather-lost' || kind === 'weather-cause') {
+            console.error('Cause chain from the throw (lost = 1 frame, cause = 2+):');
+            printCauseChain(e);
+        }
         next(e);
     }
 });
@@ -359,6 +419,10 @@ app.use((err, req, res, next) => {
     // Unknown errors are bugs: log everything, tell the client nothing
     if (!isKnown) {
         console.error('Unhandled error ===>', error);
+    } else if (error.cause) {
+        // Operational + chained: client still gets the tidy AppError. Logs keep the root.
+        console.error('AppError with cause (walk this in Datadog / Sentry):');
+        printCauseChain(error);
     }
 
     const statusCode = isKnown ? error.statusCode : 500;
