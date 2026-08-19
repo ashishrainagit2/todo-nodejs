@@ -15,13 +15,13 @@ exports.getTasks = async (req, res, next) => {
         if (!Number.isInteger(page) || page < 1) {
             throw new AppError('page must be a positive integer', 400, [
                 { field: 'page', message: 'page must be a positive integer' }
-            ]);
+            ], 'ERR_VALIDATION');
         }
 
         if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LIMIT) {
             throw new AppError(`limit must be an integer between 1 and ${MAX_LIMIT}`, 400, [
                 { field: 'limit', message: `limit must be an integer between 1 and ${MAX_LIMIT}` }
-            ]);
+            ], 'ERR_VALIDATION');
         }
 
         const skip = (page - 1) * limit;
@@ -71,7 +71,7 @@ exports.getTaskById = async (req, res, next) => {
     try {
         const task = await Task.findOne({ _id: req.params.id, userId: req.user._id });
         if (!task) {
-            throw new AppError('Task not found', 404);
+            throw new AppError('Task not found', 404, [], 'ERR_TASK_NOT_FOUND');
         }
         res.json(task);
     } catch (e) {
@@ -230,7 +230,7 @@ const validateTaskBody = (body, { partial = false, prefix = '' } = {}) => {
     return { errors, value };
 };
 
-const validationError = (errors) => new AppError('Validation failed', 400, errors);
+const validationError = (errors) => new AppError('Validation failed', 400, errors, 'ERR_VALIDATION');
 
 exports.createTask = async (req, res, next) => {
     const { errors, value } = validateTaskBody(req.body);
@@ -257,7 +257,7 @@ exports.updateTask = async (req, res, next) => {
     }
 
     if (Object.keys(updates).length === 0) {
-        return next(new AppError('No valid fields to update', 400));
+        return next(new AppError('No valid fields to update', 400, [], 'ERR_NO_UPDATE_FIELDS'));
     }
 
     try {
@@ -270,7 +270,7 @@ exports.updateTask = async (req, res, next) => {
                 .select('dueDate startReminder');
 
             if (!stored) {
-                throw new AppError('Task not found', 404);
+                throw new AppError('Task not found', 404, [], 'ERR_TASK_NOT_FOUND');
             }
 
             const dueDate = updates.dueDate ?? stored.dueDate;
@@ -290,7 +290,7 @@ exports.updateTask = async (req, res, next) => {
             { new: true, runValidators: true }
         );
         if (!task) {
-            throw new AppError('Task not found', 404);
+            throw new AppError('Task not found', 404, [], 'ERR_TASK_NOT_FOUND');
         }
         res.json(task);
     } catch (e) {
@@ -305,7 +305,7 @@ exports.deleteManyTasks = async (req, res, next) => {
         if (!Array.isArray(ids) || ids.length === 0) {
             throw new AppError('Send an array of ids in the body', 400, [
                 { field: 'ids', message: 'ids must be a non-empty array' }
-            ]);
+            ], 'ERR_VALIDATION');
         }
 
         const result = await Task.deleteMany({ _id: { $in: ids }, userId: req.user._id });
@@ -322,7 +322,7 @@ exports.deleteTask = async (req, res, next) => {
     try {
         const task = await Task.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
         if (!task) {
-            throw new AppError('Task not found', 404);
+            throw new AppError('Task not found', 404, [], 'ERR_TASK_NOT_FOUND');
         }
         res.json({ message: 'Task deleted', task });
     } catch (e) {
@@ -339,14 +339,15 @@ exports.createTasksInBulk = async (req, res, next) => {
         if (!Array.isArray(tasksFromBody) || tasksFromBody.length === 0) {
             throw new AppError('Send an array of tasks in body.tasks', 400, [
                 { field: 'tasks', message: 'tasks must be a non-empty array' }
-            ]);
+            ], 'ERR_VALIDATION');
         }
 
         if (tasksFromBody.length > BULK_CREATE_LIMIT) {
             throw new AppError(
                 `Send at most ${BULK_CREATE_LIMIT} tasks per request (received ${tasksFromBody.length})`,
                 400,
-                [{ field: 'tasks', message: `tasks allows at most ${BULK_CREATE_LIMIT} items` }]
+                [{ field: 'tasks', message: `tasks allows at most ${BULK_CREATE_LIMIT} items` }],
+                'ERR_BULK_LIMIT'
             );
         }
 

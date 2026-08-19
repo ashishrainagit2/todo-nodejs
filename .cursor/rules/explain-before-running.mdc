@@ -1,0 +1,12 @@
+---
+description: Explain the plan in chat before running tools or asking to approve a command
+alwaysApply: true
+---
+
+# Explain before running
+
+Never jump straight to a tool call, shell command, or approval prompt.
+
+First send a short message: what you are about to do, why, and what the command/file is. Then use tools.
+
+Do not change `.env`, kill processes, or start long jobs unless the user explicitly asked for that action.
