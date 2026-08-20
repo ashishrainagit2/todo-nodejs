@@ -93,14 +93,22 @@ Accurate against the code (not old checklists). Next three: **indexes → escape
 
 - Redis-backed rate limit (in-memory breaks under cluster)
 - `app.set('trust proxy', 1)` when anything sits in front
-- Request timeout
+
+### Timeouts (resource starvation)
+
+A hung dependency holds a socket, a connection-pool slot and memory until it answers. Without a deadline, someone else's slow server decides how much of your memory to consume. ✅ already done: `AbortSignal.timeout(3000)` on the outbound `fetch` in the weather lab (`app.js:124-131`).
+
+- ❌ **Mongo timeouts** — `mongoose.connect` uses defaults today (`serverSelectionTimeoutMS` 30s, no `socketTimeoutMS`), so a stalled query can hang a request far longer than a user will wait
+- ❌ **Server request timeout** — `server.requestTimeout` / `headersTimeout`, so a handler that hangs for any reason cannot hold a connection open indefinitely
+- ❌ **`AbortController` on every future outbound call** — the pattern is in place for one `fetch`; anything added later (Stripe, email, webhooks) needs the same deadline, translated to a `503` with the original kept as `cause`
+- ❌ **Retry with backoff + circuit breaker** — a timeout tells you it failed; these decide whether to try again and when to stop trying entirely
 
 ### Observability
 
-Today: `morgan` access lines (terminal + `logs/access.log`) and `GET /health`. That is only a thin **logs** pillar — see [Observability — implemented vs remaining](#observability--implemented-vs-remaining).
+Today: `morgan` access lines (terminal + `logs/access.log`), `pino` structured logs with `requestId` / `userId`, and `GET /health`. Still only the **logs** pillar — see [Observability — implemented vs remaining](#observability--implemented-vs-remaining).
 
 - Metrics — `prom-client` + `GET /metrics` (p50 / p95 / p99 per route; outside `/api/v1`)
-- Error tracking — Sentry (or similar) instead of raw `console.error`
+- Error tracking — Sentry (or similar) on top of the pino stream
 - Tracing — OpenTelemetry / APM (when more than one service)
 - Alerting — error rate or p95 on the host dashboard
 - Uptime checks — probe `/health` from outside after deploy

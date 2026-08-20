@@ -10,6 +10,7 @@ const mongoose = require('mongoose');
 const AppError = require('./utils/AppError');
 const { requestContext } = require('./utils/requestContext');
 const logger = require('./utils/logger');
+const { fetchWithTimeout, DEFAULT_TIMEOUT_MS } = require('./utils/httpClient');
 
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -108,6 +109,8 @@ app.get('/health', (req, res) => {
 // GET http://localhost:3005/error-lab?case=stack
 // GET http://localhost:3005/error-lab?case=weather-lost   (wrap without cause — crime scene gone)
 // GET http://localhost:3005/error-lab?case=weather-cause  (wrap with cause — both stacks)
+// GET http://localhost:3005/error-lab?case=hang           (never answers — the danger)
+// GET http://localhost:3005/error-lab?case=weather-timeout (AbortController cuts it at 3s)
 
 function printCauseChain(err) {
     let depth = 0;
@@ -125,12 +128,20 @@ function printCauseChain(err) {
 // Stand-in for OpenWeather: hit a closed port so Node throws a real network error
 // (ECONNREFUSED), not an HTTP 4xx. Same lesson as a dropped TCP connection to weather.
 async function callFakeWeatherApi() {
-    const res = await fetch('http://127.0.0.1:1/v1/forecast?q=Delhi', {
-        signal: AbortSignal.timeout(3000)
-    });
+    const res = await fetchWithTimeout('http://127.0.0.1:1/v1/forecast?q=Delhi');
     if (!res.ok) {
         throw new Error(`weather HTTP ${res.status}`);
     }
+    return res.json();
+}
+
+// The lecture's scenario: the upstream ACCEPTS the connection and then never answers.
+// ?case=hang is that upstream (our own server, playing the broken inventory API).
+async function callHangingApi() {
+    const res = await fetchWithTimeout(
+        `http://127.0.0.1:${process.env.PORT}/error-lab?case=hang`,
+        { timeoutMs: 3000 }
+    );
     return res.json();
 }
 
@@ -263,6 +274,31 @@ app.get('/error-lab', async (req, res, next) => {
             }
         }
 
+        if (kind === 'hang') {
+            // Deliberately never responds: no res.json, no next, no throw.
+            // This is the broken inventory API from the lecture. Called directly it
+            // ties up a socket until you give up; that is the whole point.
+            logger.warn('LAB hang: accepted the connection, will never answer');
+            return;
+        }
+
+        if (kind === 'weather-timeout') {
+            try {
+                await callHangingApi();
+            } catch (orig) {
+                // fetchWithTimeout already turned the abort into a 504 AppError.
+                // Anything else (refused, DNS) still needs wrapping here.
+                if (orig instanceof AppError) throw orig;
+                throw new AppError(
+                    'Weather service unavailable',
+                    503,
+                    [],
+                    'ERR_WEATHER_UNAVAILABLE',
+                    orig
+                );
+            }
+        }
+
         if (kind === 'weather-cause') {
             try {
                 await callFakeWeatherApi();
@@ -278,7 +314,7 @@ app.get('/error-lab', async (req, res, next) => {
         }
 
         res.json({
-            usage: 'GET /error-lab?case=sync|await|float|timeout|early|stack|weather-lost|weather-cause',
+            usage: 'GET /error-lab?case=sync|await|float|timeout|early|stack|weather-lost|weather-cause|hang|weather-timeout',
             proof: 'This whole handler is inside try/catch. sync+await → "LAB CATCH RAN". float+timeout → catch silent, process dies. early → forgot await on SUCCESS, no crash.',
             cases: {
                 sync: 'throw in try → CATCH RUNS → JSON 500. Process lives.',
@@ -288,7 +324,9 @@ app.get('/error-lab', async (req, res, next) => {
                 early: 'forgot await on a SUCCESS → 200 too soon, process lives',
                 stack: 'compare error.stack with vs without Error.captureStackTrace',
                 'weather-lost': 'fetch dead weather host, wrap in AppError WITHOUT cause. Client 503 clean. Log: only AppError stack — ECONNREFUSED gone.',
-                'weather-cause': 'same fetch, AppError WITH cause. Client still 503 clean. Log: AppError caused by undici/ECONNREFUSED (both stacks).'
+                'weather-cause': 'same fetch, AppError WITH cause. Client still 503 clean. Log: AppError caused by undici/ECONNREFUSED (both stacks).',
+                hang: `accepts the connection and NEVER answers. Postman spins forever — that socket is held hostage. Ctrl-C it. Default outbound deadline elsewhere: ${DEFAULT_TIMEOUT_MS}ms.`,
+                'weather-timeout': 'calls ?case=hang through fetchWithTimeout. AbortController severs the socket at 3s → 504 ERR_UPSTREAM_TIMEOUT, cause = AbortError. Predictable failure instead of an infinite hang.'
             }
         });
     } catch (e) {
