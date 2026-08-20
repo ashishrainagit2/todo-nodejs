@@ -3284,7 +3284,7 @@ See also: [`readme.md` — API performance & monitoring](readme.md#api-performan
 
 **Really about:** resilience — staying up when something outside your control fails. Graceful shutdown (catch `SIGTERM`, stop accepting connections, finish in-flight requests, close the Mongo connection, *then* exit), process-level safety nets (`unhandledRejection`, `uncaughtException`), timeouts on every outbound call, retries with backoff, circuit breakers, and idempotency keys so a client retry doesn't create the task twice.
 
-**Touches your code:** [§14](#14-centralized-error-handling--the-apperror-class) only catches errors that reach Express. A rejected promise **outside** a request — say in the `mongoose.connect` chain — bypasses it entirely. There's also no shutdown handler, so a deploy kills in-flight requests mid-write.
+**Touches your code:** [§14](#14-centralized-error-handling--the-apperror-class) only catches errors that reach Express. A rejected promise **outside** a request — say in the `mongoose.connect` chain — bypasses it entirely. There's also no shutdown handler, so a deploy kills in-flight requests mid-write. Timeouts, retries and the breaker are now built ([§20](#20-timeouts--abortcontroller-and-resource-starvation)–[§22](#22-circuit-breakers--closed-open-half-open-and-retry-budgets)); the process-level nets and shutdown sequence are worked through in [§23](#23-process-level-safety-nets--uncaughtexception-unhandledrejection-and-graceful-shutdown).
 
 ---
 
@@ -4115,4 +4115,235 @@ Per process. The registry is module-level, so under `cluster` ([§19](#19-how-no
 **Retries assume the next attempt might work. A circuit breaker measures whether that assumption is still true, and when the failure rate over a rolling window crosses the threshold it stops calling entirely — instant `503 ERR_CIRCUIT_OPEN`, no socket, no wait — then sends exactly one scout after a cooldown to test recovery. `utils/circuitBreaker.js` implements closed / open / half-open; `?case=breaker` walks all three and `?case=retry` three times shows 1.66 s collapse to 3 ms. Only health-related outcomes count as failures: a 404 is a healthy upstream refusing a bad request, and counting it would let other people's typos take your dependency offline.**
 
 See also: [§20 timeouts](#20-timeouts--abortcontroller-and-resource-starvation), [§21 retries](#21-retries--exponential-backoff-and-jitter), [§14 `AppError`](#14-centralized-error-handling--the-apperror-class) for the `cause` that records which upstream tripped, [`api-structure.md`](api-structure.md) for where this sits in the request path.
+
+---
+
+## 23. Process-level safety nets — `uncaughtException`, `unhandledRejection`, and graceful shutdown
+
+**Status:** ❌ not implemented — the two failure modes are demonstrable today via `?case=timeout` and `?case=float`
+
+### Q: We have `AppError`, a global handler, timeouts, retries and a breaker. What is left to catch?
+
+The errors nobody anticipated. Everything up to here handles *expected* failure: a timeout you predicted, a 503 you classified, a validation error you shaped. These two events fire only when an error reached the bottom floor — the `process` object itself — because no `try/catch`, no route, and no middleware was watching for it.
+
+That difference is why the rule for them is the opposite of everything else in this file.
+
+### Q: What are the two ways an error gets there?
+
+**One: a synchronous throw on a stack your `try` does not own.**
+
+```js
+// WRONG — the catch never runs
+try {
+    setTimeout(() => {
+        throw new Error('boom');
+    }, 1000);
+} catch (e) {
+    console.log('never printed');
+}
+```
+
+The `try` wraps only the *scheduling* of the timer, which succeeds immediately. A second later the callback runs on a brand-new stack with no `try` anywhere in it, so the throw escapes the process → `uncaughtException`.
+
+```js
+// RIGHT — handle it on the stack where it actually happens
+setTimeout(() => {
+    try {
+        riskyWork();
+    } catch (e) {
+        logger.error({ err: e }, 'timer work failed');
+    }
+}, 1000);
+```
+
+**Two: a promise that rejects with nothing attached to it.**
+
+```js
+// WRONG — nothing is waiting on this promise
+async function saveUser() {
+    throw new Error('db down');
+}
+
+saveUser();
+```
+
+```js
+// RIGHT — await it inside try/catch
+try {
+    await saveUser();
+} catch (e) {
+    logger.error({ err: e }, 'saveUser failed');
+}
+
+// or, if you deliberately do not wait, give the failure an owner
+saveUser().catch((e) => logger.error({ err: e }, 'background saveUser failed'));
+```
+
+The Express version is the one that actually bites in real code:
+
+```js
+// WRONG — 200 sent, failure arrives after the response is gone
+app.post('/tasks', async (req, res) => {
+    Task.create(req.body);
+    res.json({ ok: true });
+});
+
+// RIGHT — await it, and Express 5 routes any rejection to the error handler
+app.post('/tasks', async (req, res) => {
+    const task = await Task.create(req.body);
+    res.status(201).json({ data: task });
+});
+```
+
+One missing `await` and you tell the client `200` for a write that never happened. Note that Express 5's automatic async handling does **not** save you here: it watches the promise your handler *returns*, not promises you start and abandon ([§21](#21-retries--exponential-backoff-and-jitter) has the same distinction for retries).
+
+Both cases share one shape: **the error arrives on a stack that no longer contains your `try`.**
+
+### Q: So we log it and keep the server alive, right?
+
+No — and this is the counterintuitive rule. **Log it, shut down gracefully, and exit.** You crash the process on purpose.
+
+The reason is not the error itself, it is the code that *never ran because of it*. The `commit` that was supposed to follow. The `rollback` in the `catch`. The `finally` that released the connection. The second half of a cache update.
+
+So the process keeps serving with a transaction pinned open, a pool slot leaking, and a shared object half-written. That is an **undefined state**: the process is alive enough to accept traffic and broken enough to serve the wrong user's data, write garbled rows, or leak memory until it chokes. A zombie.
+
+```
+| Choice                | Cost                                                        |
+|-----------------------|-------------------------------------------------------------|
+| swallow and keep going| corrupted data, wrong-user responses, leaks — silent, spreading |
+| log and exit(1)       | one instance's in-flight requests, restarted in seconds     |
+```
+
+The trade is not close. It is always safer to crash and reboot than to serve corrupted data.
+
+### Q: What does the graceful part look like?
+
+Roughly this, and the order matters:
+
+```js
+process.on('uncaughtException', (err) => shutdown('uncaughtException', err));
+process.on('unhandledRejection', (err) => shutdown('unhandledRejection', err));
+
+let shuttingDown = false;
+
+async function shutdown(reason, err) {
+    if (shuttingDown) return;   // a second crash mid-shutdown must not restart this
+    shuttingDown = true;
+
+    logger.fatal({ err, reason }, 'fatal — shutting down');   // forensics first
+
+    // hard deadline: if draining hangs, die anyway
+    const kill = setTimeout(() => process.exit(1), 10000).unref();
+
+    server.close(async () => {          // stop accepting NEW connections
+        await mongoose.connection.close();   // in-flight requests finish first
+        clearTimeout(kill);
+        process.exit(1);                // non-zero: tell the orchestrator we failed
+    });
+}
+```
+
+Five things happen in that order for a reason. Log **first**, synchronously enough to survive the exit, or you lose the evidence. `server.close()` stops *new* connections while letting current requests finish. Close Mongo after, not before, or you break the requests you were trying to drain. The `unref`'d timer is a deadline for draining, because a hung request must not block the shutdown forever. And `exit(1)` — non-zero — is the signal PM2 or Kubernetes reads to replace the instance with a clean one.
+
+`SIGTERM` deserves the same handler minus the panic: that is a deploy asking politely, and without it every rolling restart kills in-flight writes.
+
+### Q: How do I see both failure modes here?
+
+They already exist as lab cases:
+
+```
+GET http://localhost:3005/error-lab?case=timeout   → uncaughtException
+GET http://localhost:3005/error-lab?case=float     → unhandledRejection
+```
+
+Both answer `200` first, then the process dies a tick later. Locally nodemon restarts and it looks harmless — that restart is doing accidentally what a real handler should do deliberately. In production, without these handlers, the process dies mid-request with no log, no drain, and no clean Mongo close.
+
+Under `cluster` ([§19](#19-how-node-serves-many-users--one-thread-cluster-worker-threads)) only the worker dies and the primary forks a replacement, which is closer to correct but still loses that worker's in-flight requests silently.
+
+### Q: Why is this an observability topic, not just an error topic?
+
+Because a crash nobody sees is not a fixed bug. These are, by definition, the failures you did not anticipate, which makes them the most valuable signal your app can emit — and the one most likely to vanish into a container's stderr. The pieces already built here matter precisely at this moment: `requestId` and `userId` from [§12b](#12b-correlation-id--asynclocalstorage-which-user-was-that) tell you *whose* request died, and pino's structured output from [§12c](#12c-structured-logging-with-pino--levels-json-and-why-not-consolelog) makes it searchable. What is missing is the destination — an error tracker or APM (Sentry, Datadog, AppSignal) that turns the exit into an alert. Reading text files over SSH is not observability; it is archaeology.
+
+### One-line summary
+
+**`uncaughtException` and `unhandledRejection` fire only for errors nothing in your code anticipated, which means the process is now in an undefined state — the `commit`, the `rollback`, the `finally` that never ran. The golden rule inverts everything else: log, drain, `process.exit(1)`, and let PM2 or Kubernetes start a clean instance, because serving corrupted data is worse than a restart. Both modes come from an error landing on a stack your `try` does not own: a throw inside `setTimeout`, or a promise with no `await` and no `.catch`. Neither handler exists here yet — `?case=timeout` and `?case=float` prove it by answering 200 and then dying.**
+
+See also: [§16.1 unbreakable applications](#161-architecting-unbreakable-nodejs-applications) for where this sits in the resilience arc, [§14 `AppError`](#14-centralized-error-handling--the-apperror-class) for the errors that *are* anticipated, [§19 cluster](#19-how-node-serves-many-users--one-thread-cluster-worker-threads) for what dies when a worker dies, [`error-handling.md`](error-handling.md) for the full lab matrix.
+
+---
+
+## 24. Streams — uploads, downloads, and constant memory
+
+**Status:** ❌ not used yet — `attachments` is `[String]`, so there is no real upload path
+
+### Q: What is a stream, in one sentence?
+
+Handling data in **chunks** instead of loading all of it into memory. That is the whole idea; everything else follows from it.
+
+### Q: Why does it matter? Show the failure.
+
+A user uploads a 2 GB video, and you do the obvious thing:
+
+```js
+const data = await fs.readFile(bigFile);   // entire 2GB now in RAM
+await upload(data);
+```
+
+Ten users at once needs 20 GB. The process dies, and not because of a bug — just arithmetic. Same story outbound: reading a big file into memory to send it.
+
+Streaming reads a 64 KB chunk, writes it, repeats. Memory stays flat regardless of file size or concurrency:
+
+```js
+const { pipeline } = require('node:stream/promises');
+
+await pipeline(
+    fs.createReadStream(bigFile),
+    res                                // 64KB at a time, constant memory
+);
+```
+
+This is the same lesson as [§20](#20-timeouts--abortcontroller-and-resource-starvation), one layer down. A hung upstream holds a socket; a buffered upload holds memory. Both are cases of **someone else deciding your process's resource consumption** — there it was their latency, here it is their file size.
+
+### Q: What is backpressure?
+
+The part that makes a stream more than a loop. Suppose you read from disk at 500 MB/s but the client's connection accepts 2 MB/s. That difference has to go somewhere, and without backpressure "somewhere" is your heap — you have reinvented the buffering problem with extra steps.
+
+A proper stream **pauses the reader** until the writer catches up. That is what `.pipe()` and the `drain` event do, and it is the same admission-control instinct as [§16.5](#165-surviving-traffic-spikes-with-backpressure): never accept work faster than you can complete it.
+
+### Q: Why `pipeline()` rather than `.pipe()`?
+
+Because `.pipe()` does not clean up. If the source errors, or the client disconnects mid-download, the other streams in the chain are left open — a slow leak that only shows up under real traffic.
+
+```
+| Approach                  | On error / abort                                  |
+|---------------------------|---------------------------------------------------|
+| a.pipe(b)                 | b is left open, no error propagation — leaks       |
+| pipeline(a, b)            | destroys every stream in the chain, rejects       |
+```
+
+`pipeline` from `node:stream/promises` also gives you a promise, so it fits `async/await` and your existing `try/catch` instead of needing error listeners on every stream.
+
+### Q: Where does this apply beyond files?
+
+An HTTP request and response **are** streams — `express.json()` is consuming one for you, and its 100 kb limit is a buffering decision someone already made on your behalf. Other cases:
+
+- exporting 100k tasks as CSV row-by-row from a Mongo cursor, instead of `Task.find()` into one giant array
+- gzip / compression, which is a transform stream in the middle of a pipeline
+- piping an upload straight to S3 without it ever touching your disk
+- `logs/access.log` — `fs.createWriteStream` opened once at startup, already in this project ([§12](#12-request-logging-morgan--health-check))
+
+### Q: What would it look like here?
+
+Two places, if the project grew:
+
+- **Uploads:** `attachments` is `[String]` today. A real implementation uses `multer` with disk or S3 storage — never `memoryStorage` for large files, since that is the 2 GB mistake with a friendlier API.
+- **Export:** `GET /tasks/export` streaming `Task.find().cursor()` into a CSV response, so one user exporting 100k tasks does not allocate 100k hydrated Mongoose documents.
+
+Both need the [§20](#20-timeouts--abortcontroller-and-resource-starvation) instinct too: a client that disconnects mid-upload must destroy the stream, or you hold the resource for nothing.
+
+### One-line summary
+
+**A stream processes data in chunks so memory stays flat no matter how big the payload is — `fs.readFile` on a 2 GB upload costs 2 GB of RAM per request, while `pipeline(readStream, res)` costs 64 KB. Backpressure is what keeps a fast producer from filling your heap when the consumer is slow, and `pipeline()` beats `.pipe()` because it destroys the whole chain on error or client abort instead of leaking. Nothing here streams yet: `attachments` is `[String]`, and the natural first uses are real file uploads and a CSV export driven by a Mongo cursor.**
+
+See also: [§20 timeouts](#20-timeouts--abortcontroller-and-resource-starvation) for the same resource-starvation lesson at the network layer, [§16.5 backpressure](#165-surviving-traffic-spikes-with-backpressure), [§12 morgan](#12-request-logging-morgan--health-check) for the write stream this project already uses.
 
