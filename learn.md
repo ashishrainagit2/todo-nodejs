@@ -3890,13 +3890,110 @@ GET http://localhost:3005/error-lab?case=weather-timeout
 |-----|----------------|-----|
 | **Mongo** | `mongoose.connect` uses defaults — `serverSelectionTimeoutMS` 30 s, no `socketTimeoutMS`. A query that stalls mid-flight outlives any user's patience | pass both in the connect options |
 | **Inbound requests** | If a handler hangs for any reason, Express holds that connection open indefinitely | `server.requestTimeout` / `headersTimeout` |
-| **Retry / circuit breaker** | A timeout says *this attempt* failed. It does not decide whether to retry, or when to stop hammering a service that is clearly down | retry with exponential backoff + jitter; a breaker that fails fast after N failures |
+| **Circuit breaker** | A timeout says *this attempt* failed. It does not decide when to stop hammering a service that is clearly down | a breaker that fails fast after N failures |
 
-A timeout is the **first** pillar, not the whole defence: it bounds one call. Retries handle transient blips, and a circuit breaker stops you turning someone else's outage into a self-inflicted flood.
+A timeout is the **first** pillar, not the whole defence: it bounds one call. Retries ([§21](#21-retries--exponential-backoff-and-jitter)) handle transient blips, and a circuit breaker stops you turning someone else's outage into a self-inflicted flood.
 
 ### One-line summary
 
-**Without a deadline, a hung upstream holds a socket, a pool slot and memory until it answers — so 100 stuck requests can exhaust descriptors or memory and kill a process that had no bug. `utils/httpClient.js` wraps every outbound `fetch` in an `AbortController` plus `setTimeout` (cleared in `finally`), turning an infinite hang into a predictable `504 ERR_UPSTREAM_TIMEOUT` with the `AbortError` kept as `cause`. Prove it with `?case=hang` (spins forever) versus `?case=weather-timeout` (fails at 3 s). Mongo timeouts, `server.requestTimeout`, retries and a circuit breaker are still open.**
+**Without a deadline, a hung upstream holds a socket, a pool slot and memory until it answers — so 100 stuck requests can exhaust descriptors or memory and kill a process that had no bug. `utils/httpClient.js` wraps every outbound `fetch` in an `AbortController` plus `setTimeout` (cleared in `finally`), turning an infinite hang into a predictable `504 ERR_UPSTREAM_TIMEOUT` with the `AbortError` kept as `cause`. Prove it with `?case=hang` (spins forever) versus `?case=weather-timeout` (fails at 3 s). Mongo timeouts, `server.requestTimeout` and a circuit breaker are still open.**
 
-See also: [§12b correlation id](#12b-correlation-id--asynclocalstorage-which-user-was-that) for the `requestId` on those log lines, [§14 `AppError`](#14-centralized-error-handling--the-apperror-class) for why a timeout is an operational error, [`readme.md` — Timeouts](readme.md#timeouts-resource-starvation) for the remaining checklist.
+See also: [§12b correlation id](#12b-correlation-id--asynclocalstorage-which-user-was-that) for the `requestId` on those log lines, [§14 `AppError`](#14-centralized-error-handling--the-apperror-class) for why a timeout is an operational error, [`readme.md` — Timeouts and retries](readme.md#timeouts-and-retries-resource-starvation) for the remaining checklist.
+
+---
+
+## 21. Retries — exponential backoff and jitter
+
+**Status:** ✅ outbound HTTP — `utils/httpClient.js`; ❌ circuit breaker
+
+### Q: Why retry at all? A timeout already gave the user a clean 504.
+
+Because most upstream failures are *transient*. A load balancer rotates a node and answers `502` for 400 ms. A DNS lookup blips. An upstream autoscales and sheds one request with `503`. In every one of those cases the same request, sent 300 ms later, succeeds.
+
+Failing the user on the first blip throws away information you already have: that the call is safe to repeat. A retry masks short instability so the user never learns the internet wobbled.
+
+### Q: So why is a naive retry dangerous?
+
+Because a naive retry — *wait exactly 1 second, try again* — is synchronised. Picture the upstream as a stadium door that jams for a few seconds. Ten thousand of your instances hit it, all get `503`, and all start a 1.000 s timer. One second later, ten thousand requests arrive in the same millisecond.
+
+If the upstream team was mid-recovery, that spike re-crushes the CPU and knocks it back down. Your retries are now *preventing* the recovery you were waiting for. This is the **thundering herd**, and it is how a small outage becomes a self-inflicted DoS.
+
+### Q: What do the two fixes actually do?
+
+**Exponential backoff** — the wait window doubles per attempt (`300 → 600 → 1200 → 2400 ms`). As an outage drags on, you ask less and less often, which lowers the pressure exactly when the upstream needs breathing room.
+
+**Jitter** — randomise inside that window, so instances don't share a schedule. Backoff alone still puts all ten thousand on the same `1-2-4-8` clock; jitter is what actually staggers the crowd. It is one `Math.random()` call, and it changes the macro behaviour of the whole fleet.
+
+```js
+// utils/httpClient.js
+function backoffDelay(attempt, baseMs, maxMs) {
+    const window = Math.min(maxMs, baseMs * 2 ** attempt);
+    return Math.round(Math.random() * window);
+}
+```
+
+Two flavours worth knowing:
+
+```
+| Flavour        | Formula                    | 2nd retry, base 1000ms |
+|----------------|----------------------------|------------------------|
+| Partial jitter | exp + random(0..1000)      | 2000–3000ms            |
+| Full jitter    | random(0..exp)             | 0–2000ms               |
+```
+
+Partial jitter is what the lecture describes. We use **full jitter** — the AWS architecture-blog default — because it spreads the crowd across the *entire* window instead of a 1 s band bolted onto a fixed floor, which measurably reduces competing work under contention.
+
+### Q: When must you NOT retry?
+
+This is the part naive implementations get wrong, and it matters more than the maths.
+
+```
+| Situation                     | Retry? | Why                                                    |
+|-------------------------------|--------|--------------------------------------------------------|
+| Timeout / ECONNREFUSED / DNS  | yes    | transient by nature                                    |
+| 408 425 429 500 502 503 504   | yes    | upstream says "not now"                                |
+| 400 401 403 404 422           | NO     | your request is wrong; replaying wastes both sides     |
+| POST / PATCH                  | NO     | may have succeeded already — you'd create two records  |
+| Caller aborted (user left)    | NO     | nobody is waiting for the answer                       |
+```
+
+The `POST` rule is the subtle one. A timeout does **not** mean the upstream ignored you — it may have processed the charge and been slow to answer. Replaying it charges the card twice. So only idempotent methods (`GET / HEAD / OPTIONS / PUT / DELETE`) retry by default; anything else needs `retryNonIdempotent: true`, which is only safe once the upstream accepts an idempotency key.
+
+### Q: How is it wired here?
+
+`fetchWithTimeout(url, options)` is now an attempt **loop**, not a single call:
+
+- `retries` (default `2`, `HTTP_RETRIES`) → 3 attempts total; per attempt the [§20](#20-timeouts--abortcontroller-and-resource-starvation) deadline still applies
+- a **fresh** `AbortController` per attempt — a signal that has fired stays aborted forever, so reusing one aborts every later attempt instantly
+- `Retry-After` on the response wins over our maths — a server under pressure often tells you exactly when to come back
+- exhausted attempts throw `503 ERR_UPSTREAM_UNAVAILABLE`, with the real status kept as `cause` so `printCauseChain` in `app.js` prints `upstream responded 503 after 4 attempt(s)` under the clean message
+- non-retryable statuses (`404`, `401`, …) are returned to the caller untouched
+- the current `requestId` rides along as an `x-request-id` header, so one id covers the whole hop chain ([§12b](#12b-correlation-id--asynclocalstorage-which-user-was-that))
+
+### Q: How do I see it?
+
+`?case=flaky` always answers `503` — that is the jammed door, deliberately never recovering. `?case=retry` calls it through the client with `retries: 3`:
+
+```
+GET http://localhost:3005/error-lab?case=retry
+```
+
+Two consecutive runs of the identical request:
+
+```
+run 1 → attempt 1 waitMs 30    attempt 2 waitMs 503   attempt 3 waitMs 344    total 0.96s
+run 2 → attempt 1 waitMs 39    attempt 2 waitMs 403   attempt 3 waitMs 1109   total 1.59s
+```
+
+Same code, same upstream, different schedule. That divergence **is** jitter — and it is why ten thousand instances don't arrive together. Note also that all four attempts plus the inbound `flaky` lines share one `requestId`.
+
+### Q: What is still missing?
+
+Retries ride out a *blip*. If the upstream is hard down for an hour, every single request still burns 4 attempts and ~2 s before failing — you are paying full price for a certainty. That is the **circuit breaker**: after N consecutive failures, trip open and fail instantly without calling out at all, then let one probe through periodically to test recovery.
+
+### One-line summary
+
+**A naive fixed-delay retry synchronises your whole fleet into a spike that re-kills a recovering upstream — the thundering herd. `utils/httpClient.js` retries only transient failures on only idempotent methods, waiting a random slice of a doubling window (full jitter), honouring `Retry-After`, and throwing `503 ERR_UPSTREAM_UNAVAILABLE` once attempts run out. Prove it with `?case=retry` twice: the waits differ every run. A circuit breaker is still open — retries handle blips, not hour-long outages.**
+
+See also: [§20 timeouts](#20-timeouts--abortcontroller-and-resource-starvation) for the per-attempt deadline, [§14 `AppError`](#14-centralized-error-handling--the-apperror-class) for the `cause` that carries the upstream status through the wrap, [`readme.md` — Timeouts and retries](readme.md#timeouts-and-retries-resource-starvation).
 

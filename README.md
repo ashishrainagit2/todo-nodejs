@@ -95,15 +95,17 @@ Accurate against the code (not old checklists). Next three: **indexes → escape
 - Redis-backed rate limit (in-memory breaks under cluster)
 - `app.set('trust proxy', 1)` when anything sits in front
 
-### Timeouts (resource starvation)
+### Timeouts and retries (resource starvation)
 
-A hung dependency holds a socket, a connection-pool slot and memory until it answers. Without a deadline, someone else's slow server decides how much of your memory to consume. Full walkthrough in [`learn.md` §20](learn.md#20-timeouts--abortcontroller-and-resource-starvation).
+A hung dependency holds a socket, a connection-pool slot and memory until it answers. Without a deadline, someone else's slow server decides how much of your memory to consume. Full walkthrough in [`learn.md` §20](learn.md#20-timeouts--abortcontroller-and-resource-starvation) and [§21](learn.md#21-retries--exponential-backoff-and-jitter).
 
-✅ **Done — outbound HTTP.** `utils/httpClient.js` wraps every `fetch` in an `AbortController` + `setTimeout` (cleared in `finally`), default 3000ms via `HTTP_TIMEOUT_MS`. On our deadline it throws `504 ERR_UPSTREAM_TIMEOUT` with the `AbortError` as `cause`. Prove it: `?case=hang` spins forever, `?case=weather-timeout` fails at ~3s.
+✅ **Done — outbound HTTP timeouts.** `utils/httpClient.js` wraps every `fetch` in an `AbortController` + `setTimeout` (cleared in `finally`), default 3000ms via `HTTP_TIMEOUT_MS`. On our deadline it throws `504 ERR_UPSTREAM_TIMEOUT` with the `AbortError` as `cause`. Prove it: `?case=hang` spins forever, `?case=weather-timeout` fails at ~3s.
+
+✅ **Done — retries with backoff + jitter.** Same file. Two retries by default (`HTTP_RETRIES`) on transient failures only — timeouts, network errors, and `408 / 425 / 429 / 500 / 502 / 503 / 504`. Each wait is a random slice of a doubling window (`300 → 600 → 1200ms`, capped at `HTTP_MAX_BACKOFF_MS`), so instances don't retry in lockstep and hammer a recovering server. `Retry-After` wins over our math, `POST` is never replayed, and a caller-cancelled request never retries. Exhausted attempts throw `503 ERR_UPSTREAM_UNAVAILABLE`. Prove it: `?case=retry` — 4 attempts, and the waits differ every run.
 
 - ❌ **Mongo timeouts** — `mongoose.connect` uses defaults today (`serverSelectionTimeoutMS` 30s, no `socketTimeoutMS`), so a stalled query can hang a request far longer than a user will wait
 - ❌ **Server request timeout** — `server.requestTimeout` / `headersTimeout`, so a handler that hangs for any reason cannot hold a connection open indefinitely
-- ❌ **Retry with backoff + circuit breaker** — a timeout tells you one attempt failed; these decide whether to try again and when to stop hammering a service that is clearly down
+- ❌ **Circuit breaker** — retries ride out a blip, but if an upstream is hard down for an hour, every request still pays 4 attempts before failing. A breaker trips after N failures and fails fast
 
 ### Observability
 
@@ -511,10 +513,10 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 | **404 handler** | Unknown URL → JSON, not HTML | ✅ |
 | **Global error handler** | One `app.use(err, req, res, next)` for all crashes | ✅ |
 | **`next(err)` in controllers** | Pass errors up instead of duplicate responses | ✅ |
-| **Structured logging** | Log requests + errors | ✅ `morgan` requests — `winston` JSON logs still ❌ |
+| **Structured logging** | Log requests + errors | ✅ `morgan` requests + `pino` JSON app logs, both stamped with `requestId` / `userId` |
 | **Health check** | `GET /health` — is server alive? | ✅ 200 / 503 on DB state |
 | **Meaningful error messages** | Exact status + message per failure type | ✅ steps 1–3 — see [API error handling](#api-error-handling) |
-| **Handle API failure (client + server)** | Timeouts, retry, idempotency, circuit breaker | 💡 partial — see [Handling API failure](#handling-api-failure) |
+| **Handle API failure (client + server)** | Timeouts, retry, idempotency, circuit breaker | 💡 partial — ✅ outbound timeouts + retry with jitter; ❌ idempotency, circuit breaker |
 
 ---
 
