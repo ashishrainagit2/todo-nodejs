@@ -60,6 +60,9 @@ All resource routes are versioned — `/api/v1/tasks`, `/api/v1/auth/login`. `GE
 - ✅ Request context — `AsyncLocalStorage` request id (`X-Request-Id`) + `userId` after JWT; morgan (`:id :user`) and every pino line share both
 - ✅ Structured logs — `pino` (`utils/logger.js`); `mixin` stamps `requestId` / `userId` on every line, `pino-pretty` locally, JSON to stdout in production
 - ✅ Outbound timeouts — `utils/httpClient.js` (`AbortController` + `setTimeout`, default 3s) → `504 ERR_UPSTREAM_TIMEOUT` with the abort kept as `cause` (see [`learn.md` §20](learn.md#20-timeouts--abortcontroller-and-resource-starvation))
+- ✅ Outbound retries — exponential backoff + full jitter, transient statuses and idempotent methods only, `Retry-After` honoured → `503 ERR_UPSTREAM_UNAVAILABLE` when attempts run out (see [`learn.md` §21](learn.md#21-retries--exponential-backoff-and-jitter))
+- ✅ Circuit breaker — `utils/circuitBreaker.js`, closed / open / half-open per upstream, failure *rate* over a rolling window, one scout call to test recovery → `503 ERR_CIRCUIT_OPEN` in ~0ms while open (see [`learn.md` §22](learn.md#22-circuit-breakers--closed-open-half-open-and-retry-budgets))
+- ✅ Cause chaining — `AppError` accepts a `cause`, so the client gets a clean message while the log keeps the root failure and both stacks
 - ✅ Health check — `GET /health` → **200** `{ status, db, uptime }`, **503** when MongoDB is not connected
 - ✅ API versioning — all routes under `/api/v1` via `routes/v1.js` + one prefix in `app.js` (see [`learn.md` §13](learn.md#13-api-versioning--apiv1))
 - ✅ Pagination — `GET /api/v1/tasks?page=&limit=` returns `{ data, page, limit, total, totalPages }` (default page 1, limit 10, max 100)
@@ -81,6 +84,8 @@ Accurate against the code (not old checklists). Next three: **indexes → escape
 - Role checks (`role` exists, never used → no 403)
 - Escape `?search` for `$regex`
 - File uploads (`multer`; `attachments` is still `[String]`)
+- Streams for uploads / downloads — `pipeline()` from `node:stream/promises` rather than buffering a whole file in memory. This is where memory pressure actually shows up, and where backpressure and cleanup-on-abort stop mattering in theory and start mattering in production
+- Refresh token rotation (today's JWT just expires — no way to revoke, no long-lived session)
 - Nested subTasks / comments as real objects
 
 ### Database / speed
@@ -94,6 +99,14 @@ Accurate against the code (not old checklists). Next three: **indexes → escape
 
 - Redis-backed rate limit (in-memory breaks under cluster)
 - `app.set('trust proxy', 1)` when anything sits in front
+
+### Process-level safety nets
+
+The bottom floor: errors that reached the `process` object because nothing in the code anticipated them. Full walkthrough in [`learn.md` §23](learn.md#23-process-level-safety-nets--uncaughtexception-unhandledrejection-and-graceful-shutdown).
+
+- ❌ **`uncaughtException` / `unhandledRejection` handlers** — today a throw inside a timer or one forgotten `await` kills the process with nothing logged. Prove it: `?case=timeout` and `?case=float` both answer `200` and then die
+- ❌ **Graceful shutdown** — no `SIGTERM` handler, so a deploy kills in-flight requests mid-write. Should stop accepting connections, drain what's running, close Mongo, flush logs, then `process.exit(1)`
+- ❌ **Crash visibility** — nodemon restarting locally hides the problem; in production the exit needs to reach an error tracker, not just stderr
 
 ### Timeouts and retries (resource starvation)
 
@@ -110,6 +123,16 @@ A hung dependency holds a socket, a connection-pool slot and memory until it ans
 - ❌ **Shared breaker state** — the registry is per process, so under `cluster` each worker learns about an outage independently. Shared state needs Redis
 - ❌ **Fallbacks** — an open circuit returns 503; serving stale cache or a degraded response would be better
 - ❌ **Idempotency keys** — a client retry of `POST /tasks` still creates a second task
+
+### Background jobs & queues (async processing)
+
+Everything today happens inside the request. Anything slow — sending a "task due" email, generating an export, processing an upload — should be handed to a worker so the response doesn't wait for it. All ❌; nothing here is built.
+
+- ❌ **A queue** — `BullMQ` (Redis-backed, the obvious fit for a Node/Redis stack) or `RabbitMQ` (broker, routing, per-message ack) or `Kafka` (an event log, for streams and replay — overkill here). These are alternatives, not a stack to adopt together
+- ❌ **Background workers** — a separate process pulling jobs off the queue, so heavy work never blocks the event loop that serves HTTP
+- ❌ **Retry + backoff per job** — the same budget logic as [`learn.md` §21](learn.md#21-retries--exponential-backoff-and-jitter), except no user is waiting for the answer
+- ❌ **Dead-letter queue** — where a job goes once it exhausts its retries. Without one, a job that *crashes* the worker gets redelivered forever and takes down every worker in turn (a "poison pill"), halting all other users' jobs. The DLQ quarantines it so the active queue stays healthy and you can inspect and replay it later
+- ❌ **Scheduled jobs** — recurring work on a timer (nightly cleanup, overdue-task reminders); BullMQ repeatable jobs or a cron scheduler
 
 ### Observability
 
@@ -557,7 +580,8 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 | **Stateless API** | No session data in server memory — scales horizontally | ❌ |
 | **Load balancing** | Spread traffic across multiple servers (nginx, cloud LB) | ❌ infra |
 | **Horizontal scaling** | More servers, not bigger server | ❌ infra |
-| **Background jobs** | Heavy work off the request (email, exports) — queues later | ❌ |
+| **Background jobs** | Heavy work off the request (email, exports) — **BullMQ** (Redis, fits a Node stack) / **RabbitMQ** (broker + routing) / **Kafka** (event log, replay). Pick one, not all | ❌ |
+| **Dead-letter queue** | Where a job lands after its retries fail — stops a worker-crashing "poison pill" being redelivered forever | ❌ |
 | **Concurrent connections** | Many clients at once on one Node process — event loop, pools | ❌ concept — see [Advanced concepts](#advanced-concepts-learn-breadth--force-in-when-ready) |
 
 > Load balancing & multiple servers are **infrastructure** — you learn the concept first; setup comes at deploy time.
@@ -1009,6 +1033,25 @@ Replace `express-rate-limit` on `/tasks` with a hand-rolled version. Keep the li
 **Response details to match the library:** `429` JSON body, `Retry-After` header, and `RateLimit-*` standard headers.
 
 See also: [Rate limiting](#rate-limiting) for the current library setup, `learn.md` for the Q&A.
+
+---
+
+## External resources
+
+[**10 Backend Concepts Every Developer Should Know** (YouTube Shorts)](https://www.youtube.com/shorts/Yd7BX0u2Zvg)
+
+A fast-paced run through the ten backend concepts interviewers keep coming back to — system design, API design, database optimisation, auth, and the rest. Reference links from the video:
+
+- [System design basics](https://github.com/donnemartin/system-design-primer)
+- [Database indexing & query optimisation](https://use-the-index-luke.com)
+- [Caching strategies (Redis, Memcached)](https://redis.io/docs/manual/persistence/)
+- [Microservices & API design](https://microservices.io)
+- [Message queues (Kafka, RabbitMQ, SQS)](https://kafka.apache.org/documentation/)
+- [Rate limiting & throttling](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-RateLimit-Limit)
+- [Authentication & authorization (JWT, OAuth)](https://auth0.com/docs/get-started/authentication-and-authorization)
+- [Load balancing & scalability](https://aws.amazon.com/elasticloadbalancing/)
+- [Concurrency & multithreading](https://www.baeldung.com/java-concurrency)
+- [Logging, monitoring & debugging](https://logz.io/blog/logging-monitoring-debugging/)
 
 ---
 

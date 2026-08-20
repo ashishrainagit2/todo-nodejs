@@ -196,6 +196,7 @@ Every log line from steps 2–9 carries the same `requestId`. That is the whole 
 | Timeouts + resource starvation | [`learn.md` §20](learn.md#20-timeouts--abortcontroller-and-resource-starvation) |
 | Retries, backoff, jitter | [`learn.md` §21](learn.md#21-retries--exponential-backoff-and-jitter) |
 | Circuit breakers + retry budgets | [`learn.md` §22](learn.md#22-circuit-breakers--closed-open-half-open-and-retry-budgets) |
+| Process safety nets + graceful shutdown | [`learn.md` §23](learn.md#23-process-level-safety-nets--uncaughtexception-unhandledrejection-and-graceful-shutdown) |
 | Remaining task list | [`README.md` — Pending](README.md) |
 
 Live demos for the failure paths: `GET /error-lab` lists every case, including `?case=weather-cause` (cause chaining), `?case=weather-timeout` (the 3s deadline), `?case=retry` (backoff + jitter) and `?case=breaker` (all three breaker states in one request).
