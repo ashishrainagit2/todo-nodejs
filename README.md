@@ -97,15 +97,19 @@ Accurate against the code (not old checklists). Next three: **indexes → escape
 
 ### Timeouts and retries (resource starvation)
 
-A hung dependency holds a socket, a connection-pool slot and memory until it answers. Without a deadline, someone else's slow server decides how much of your memory to consume. Full walkthrough in [`learn.md` §20](learn.md#20-timeouts--abortcontroller-and-resource-starvation) and [§21](learn.md#21-retries--exponential-backoff-and-jitter).
+A hung dependency holds a socket, a connection-pool slot and memory until it answers. Without a deadline, someone else's slow server decides how much of your memory to consume. Full walkthrough in [`learn.md` §20](learn.md#20-timeouts--abortcontroller-and-resource-starvation), [§21](learn.md#21-retries--exponential-backoff-and-jitter) and [§22](learn.md#22-circuit-breakers--closed-open-half-open-and-retry-budgets).
 
 ✅ **Done — outbound HTTP timeouts.** `utils/httpClient.js` wraps every `fetch` in an `AbortController` + `setTimeout` (cleared in `finally`), default 3000ms via `HTTP_TIMEOUT_MS`. On our deadline it throws `504 ERR_UPSTREAM_TIMEOUT` with the `AbortError` as `cause`. Prove it: `?case=hang` spins forever, `?case=weather-timeout` fails at ~3s.
 
 ✅ **Done — retries with backoff + jitter.** Same file. Two retries by default (`HTTP_RETRIES`) on transient failures only — timeouts, network errors, and `408 / 425 / 429 / 500 / 502 / 503 / 504`. Each wait is a random slice of a doubling window (`300 → 600 → 1200ms`, capped at `HTTP_MAX_BACKOFF_MS`), so instances don't retry in lockstep and hammer a recovering server. `Retry-After` wins over our math, `POST` is never replayed, and a caller-cancelled request never retries. Exhausted attempts throw `503 ERR_UPSTREAM_UNAVAILABLE`. Prove it: `?case=retry` — 4 attempts, and the waits differ every run.
 
+✅ **Done — circuit breaker.** `utils/circuitBreaker.js`, gated inside `fetchWithTimeout`. Closed / open / half-open per upstream: trip when ≥ `CB_FAILURE_RATE` of the last `CB_WINDOW_MS` fails (min `CB_MIN_CALLS` samples), then reject instantly with `503 ERR_CIRCUIT_OPEN` for `CB_OPEN_MS` before letting one scout through. Only health-related outcomes count — a `404` is a healthy upstream, so client mistakes can never trip it. Prove it: `?case=breaker` walks all three states, `?case=breaker-state` shows live counters, and `?case=retry` three times collapses from 1.66s to 3ms.
+
 - ❌ **Mongo timeouts** — `mongoose.connect` uses defaults today (`serverSelectionTimeoutMS` 30s, no `socketTimeoutMS`), so a stalled query can hang a request far longer than a user will wait
 - ❌ **Server request timeout** — `server.requestTimeout` / `headersTimeout`, so a handler that hangs for any reason cannot hold a connection open indefinitely
-- ❌ **Circuit breaker** — retries ride out a blip, but if an upstream is hard down for an hour, every request still pays 4 attempts before failing. A breaker trips after N failures and fails fast
+- ❌ **Shared breaker state** — the registry is per process, so under `cluster` each worker learns about an outage independently. Shared state needs Redis
+- ❌ **Fallbacks** — an open circuit returns 503; serving stale cache or a degraded response would be better
+- ❌ **Idempotency keys** — a client retry of `POST /tasks` still creates a second task
 
 ### Observability
 
@@ -516,7 +520,7 @@ Inspired by: [10 Backend Concepts Every Node.js Developer Should Know](https://w
 | **Structured logging** | Log requests + errors | ✅ `morgan` requests + `pino` JSON app logs, both stamped with `requestId` / `userId` |
 | **Health check** | `GET /health` — is server alive? | ✅ 200 / 503 on DB state |
 | **Meaningful error messages** | Exact status + message per failure type | ✅ steps 1–3 — see [API error handling](#api-error-handling) |
-| **Handle API failure (client + server)** | Timeouts, retry, idempotency, circuit breaker | 💡 partial — ✅ outbound timeouts + retry with jitter; ❌ idempotency, circuit breaker |
+| **Handle API failure (client + server)** | Timeouts, retry, idempotency, circuit breaker | 💡 partial — ✅ outbound timeouts, retry with jitter, circuit breaker; ❌ idempotency keys, fallbacks |
 
 ---
 

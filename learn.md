@@ -3989,11 +3989,130 @@ Same code, same upstream, different schedule. That divergence **is** jitter — 
 
 ### Q: What is still missing?
 
-Retries ride out a *blip*. If the upstream is hard down for an hour, every single request still burns 4 attempts and ~2 s before failing — you are paying full price for a certainty. That is the **circuit breaker**: after N consecutive failures, trip open and fail instantly without calling out at all, then let one probe through periodically to test recovery.
+Retries ride out a *blip*. If the upstream is hard down for an hour, every single request still burns 4 attempts and ~2 s before failing — you are paying full price for a certainty. That is the **circuit breaker**, [§22](#22-circuit-breakers--closed-open-half-open-and-retry-budgets).
 
 ### One-line summary
 
-**A naive fixed-delay retry synchronises your whole fleet into a spike that re-kills a recovering upstream — the thundering herd. `utils/httpClient.js` retries only transient failures on only idempotent methods, waiting a random slice of a doubling window (full jitter), honouring `Retry-After`, and throwing `503 ERR_UPSTREAM_UNAVAILABLE` once attempts run out. Prove it with `?case=retry` twice: the waits differ every run. A circuit breaker is still open — retries handle blips, not hour-long outages.**
+**A naive fixed-delay retry synchronises your whole fleet into a spike that re-kills a recovering upstream — the thundering herd. `utils/httpClient.js` retries only transient failures on only idempotent methods, waiting a random slice of a doubling window (full jitter), honouring `Retry-After`, and throwing `503 ERR_UPSTREAM_UNAVAILABLE` once attempts run out. Prove it with `?case=retry` twice: the waits differ every run.**
 
-See also: [§20 timeouts](#20-timeouts--abortcontroller-and-resource-starvation) for the per-attempt deadline, [§14 `AppError`](#14-centralized-error-handling--the-apperror-class) for the `cause` that carries the upstream status through the wrap, [`readme.md` — Timeouts and retries](readme.md#timeouts-and-retries-resource-starvation).
+See also: [§20 timeouts](#20-timeouts--abortcontroller-and-resource-starvation) for the per-attempt deadline, [§22 circuit breakers](#22-circuit-breakers--closed-open-half-open-and-retry-budgets) for what stops the retries entirely, [`readme.md` — Timeouts and retries](readme.md#timeouts-and-retries-resource-starvation).
+
+---
+
+## 22. Circuit breakers — closed, open, half-open, and retry budgets
+
+**Status:** ✅ outbound HTTP — `utils/circuitBreaker.js`, gated in `utils/httpClient.js`
+
+### Q: Timeouts bound a call and retries ride out a blip. What is left?
+
+The case where retrying is *provably* pointless. An upstream that has been dead for ten minutes will be dead for your next attempt too, and every request that keeps trying pays the full bill: 4 attempts, ~2 s of latency, a socket, a connection-pool slot, and memory for each one — to reach a conclusion you already knew.
+
+Worse, that wasted work is what turns one dead dependency into an outage of *your* service. Your workers sit blocked on a corpse, your pool drains, and requests that had nothing to do with the payment API start queueing behind the ones that do. That is a **cascading failure**, and the breaker exists to stop it.
+
+The name is literal. The breaker box in your house trips on a surge to stop the wiring cooking. Here the surge is a failure rate, and what it protects is your own process.
+
+### Q: How do the three states work?
+
+```
+| State         | Behaviour                                          | Exit condition                     |
+|---------------|----------------------------------------------------|------------------------------------|
+| **closed**    | Calls flow normally, outcomes counted              | failure rate crosses threshold     |
+| **open**      | NO call attempted, instant 503 ERR_CIRCUIT_OPEN    | cooldown elapses → half-open       |
+| **half-open** | Exactly ONE scout call allowed through             | scout ok → closed; scout fails → open |
+```
+
+The half-open state is the clever part. Recovery has to be *tested*, and the test has to be cheap. One scout answers "is it back?" without sending the whole crowd at a server that is still finding its feet — which would knock it straight back over, the same thundering-herd mistake as [§21](#21-retries--exponential-backoff-and-jitter), just at a different layer.
+
+Two rules make it safe. Only one scout is in flight at a time; everyone else keeps failing fast. And a failed scout costs a **full** cooldown again — no second chances, no re-counting up to `minCalls`, because we already know this upstream is sick.
+
+### Q: What exactly counts as a failure?
+
+This is the part that separates a breaker that helps from one that causes outages. The breaker measures **upstream health**, so only things that say something about health may count:
+
+```
+| Outcome                        | Counts as | Why                                                |
+|--------------------------------|-----------|----------------------------------------------------|
+| timeout / ECONNREFUSED / DNS   | failure   | the upstream could not answer                      |
+| 408 425 429 500 502 503 504    | failure   | it answered "not now"                              |
+| 200 / 201                      | success   | healthy                                            |
+| 400 / 401 / 404 / 422          | SUCCESS   | it answered fine — OUR request was wrong           |
+| caller aborted (user left)     | ignored   | our own act; counting it would trip on our traffic |
+```
+
+That fifth row is the trap. If you count 4xx as failures, a burst of clients sending bad input trips the breaker and takes the upstream offline **for everyone** — a self-inflicted outage caused by other people's typos.
+
+### Q: How is it configured, and why a rate rather than a count?
+
+```js
+// utils/circuitBreaker.js
+CB_WINDOW_MS   = 10000  // rolling window — what "recently" means
+CB_FAILURE_RATE= 0.5    // trip at 50% failures inside that window
+CB_MIN_CALLS   = 5      // ...but only once there are enough samples to judge
+CB_OPEN_MS     = 30000  // how long to stay open before sending a scout
+```
+
+A **rate over a rolling window** rather than "5 consecutive failures", because a busy service can fail half its calls while never failing five in a row, and an all-time counter would condemn a service for a blip an hour ago. `minCalls` guards the other end: one failure out of one call is a 100% failure rate, and tripping on that punishes a single hiccup.
+
+Two implementation notes worth copying. The open → half-open transition is computed from the clock when a call asks, not scheduled with a `setTimeout`, so an idle breaker holds nothing on the event loop. And breakers live in a module-level registry, deliberately shared across requests — a per-request breaker would learn nothing, since the entire point is remembering what *other* requests already discovered.
+
+### Q: How do I see all of it?
+
+`?case=breaker` walks the whole cycle in one request, using a lab key with a 1.5 s cooldown so you don't wait 30 s:
+
+```
+GET http://localhost:3005/error-lab?case=breaker
+```
+
+```
+step                                                       result                     ms   called upstream  state
+1  closed: real call to a sick upstream                     ERR_UPSTREAM_UNAVAILABLE   48ms  true            closed
+2  closed: real call, still counting                        ERR_UPSTREAM_UNAVAILABLE    6ms  true            closed
+3  closed: 3rd failure crosses the threshold, trips         ERR_UPSTREAM_UNAVAILABLE    4ms  true            open
+4  OPEN: rejected instantly, no HTTP request made           ERR_CIRCUIT_OPEN            1ms  FALSE           open
+5  OPEN: still failing fast                                 ERR_CIRCUIT_OPEN            0ms  FALSE           open
+6  waiting out the 1500ms cooldown
+7  HALF-OPEN: scout sent to the still-sick upstream, dies    ERR_UPSTREAM_UNAVAILABLE  14ms  true            open
+8  OPEN again: full cooldown restarts, no call made         ERR_CIRCUIT_OPEN            2ms  FALSE           open
+9  waiting out the cooldown a second time
+10 HALF-OPEN: scout sent, upstream is healthy now           HTTP 200                    8ms  true            closed
+11 closed again: normal traffic resumes                     HTTP 200                   10ms  true            closed
+```
+
+The proof is the `ms` column. Steps 4, 5 and 8 answer in **0–2 ms with no network call at all** — that is the breaker returning your sockets and your latency budget. `?case=breaker-state` shows live state, failure rate, trip count and `reopensInMs` per upstream.
+
+You can also watch the breaker cut a retry loop short. Call `?case=retry` three times:
+
+```
+run 1 → 503 in 1.657s   (all 4 attempts, breaker still closed)
+run 2 → 503 in 0.273s   (breaker tripped mid-loop, remaining attempts abandoned)
+run 3 → 503 in 0.003s   (open — no call attempted at all)
+```
+
+1.66 s → 3 ms for the same request. That is the whole pillar in one line.
+
+### Q: What is a retry budget, and where is ours?
+
+A retry budget is the policy deciding how much effort a failure class *deserves*. Not all errors are equal, and spending equally on all of them is how you waste compute on certainties.
+
+```
+| Failure class                 | Budget       | Because                                           |
+|-------------------------------|--------------|---------------------------------------------------|
+| 400 validation, 401, 404, 422 | ZERO         | deterministic — identical input, identical answer |
+| 429 rate limited              | 1, obey Retry-After | more attempts make the limit worse         |
+| timeout, 502, 503, network    | 2 retries + jitter | genuinely transient                        |
+| upstream known down (breaker) | ZERO         | we already measured that it fails                 |
+| POST / PATCH                  | ZERO by default | replaying may duplicate a record               |
+```
+
+Ours is enforced in `utils/httpClient.js` rather than written down as prose: `RETRYABLE_STATUS` gives 4xx a budget of zero, `IDEMPOTENT_METHODS` gives unsafe verbs zero, `Retry-After` caps the 429 case, and the breaker drops the budget to zero for an upstream that has already proven itself down. The lecture's example — retrying an email-missing-`@` validation error a hundred times and getting a hundred identical errors — is exactly the zero-budget row, and it is why 4xx is deliberately absent from that set.
+
+### Q: What is still missing?
+
+Per process. The registry is module-level, so under `cluster` ([§19](#19-how-node-serves-many-users--one-thread-cluster-worker-threads)) each of the 8 workers learns independently — worker 3 can be open while worker 5 is still discovering the outage. Shared state needs Redis. There is also no metric or alert on `trips`, which is one of the most valuable signals an API emits, and no fallback: when the circuit is open you could serve stale cache or a degraded response instead of a 503. Mongo and inbound requests still have no breaker or timeout at all.
+
+### One-line summary
+
+**Retries assume the next attempt might work. A circuit breaker measures whether that assumption is still true, and when the failure rate over a rolling window crosses the threshold it stops calling entirely — instant `503 ERR_CIRCUIT_OPEN`, no socket, no wait — then sends exactly one scout after a cooldown to test recovery. `utils/circuitBreaker.js` implements closed / open / half-open; `?case=breaker` walks all three and `?case=retry` three times shows 1.66 s collapse to 3 ms. Only health-related outcomes count as failures: a 404 is a healthy upstream refusing a bad request, and counting it would let other people's typos take your dependency offline.**
+
+See also: [§20 timeouts](#20-timeouts--abortcontroller-and-resource-starvation), [§21 retries](#21-retries--exponential-backoff-and-jitter), [§14 `AppError`](#14-centralized-error-handling--the-apperror-class) for the `cause` that records which upstream tripped, [`api-structure.md`](api-structure.md) for where this sits in the request path.
 

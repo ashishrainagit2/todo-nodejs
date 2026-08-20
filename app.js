@@ -11,6 +11,7 @@ const AppError = require('./utils/AppError');
 const { requestContext } = require('./utils/requestContext');
 const logger = require('./utils/logger');
 const { fetchWithTimeout, DEFAULT_TIMEOUT_MS } = require('./utils/httpClient');
+const { breakerFor, snapshotBreakers, resetBreaker } = require('./utils/circuitBreaker');
 
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -113,6 +114,8 @@ app.get('/health', (req, res) => {
 // GET http://localhost:3005/error-lab?case=weather-timeout (AbortController cuts it at 3s)
 // GET http://localhost:3005/error-lab?case=flaky           (always 503 — the jammed door)
 // GET http://localhost:3005/error-lab?case=retry           (4 attempts, backoff + jitter)
+// GET http://localhost:3005/error-lab?case=breaker         (closed → open → half-open → closed)
+// GET http://localhost:3005/error-lab?case=breaker-state   (live state of every breaker)
 
 function printCauseChain(err) {
     let depth = 0;
@@ -153,9 +156,77 @@ async function callHangingApi() {
 async function callFlakyApi() {
     const res = await fetchWithTimeout(
         `http://127.0.0.1:${process.env.PORT}/error-lab?case=flaky`,
-        { retries: 3, backoffMs: 300 }
+        // Real callers get the default breaker key — the origin. These lab routes all
+        // share one origin, so an explicit key keeps this demo from tripping the
+        // breaker that ?case=weather-timeout and /health depend on.
+        { retries: 3, backoffMs: 300, breakerKey: 'lab-flaky-upstream' }
     );
     return res.json();
+}
+
+// Walks all three breaker states in one request: closed → open → half-open → closed.
+// Timings are the proof. The real calls cost milliseconds of network; the open-circuit
+// ones cost ~0 because no request is made at all.
+const LAB_BREAKER_KEY = 'lab-breaker';
+const LAB_BREAKER_OPTIONS = { minCalls: 3, failureRate: 0.5, openMs: 1500, windowMs: 10000 };
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function runBreakerDemo() {
+    // Fresh state each run, and its own key so tripping it cannot poison the
+    // timeout demos that talk to the same origin.
+    resetBreaker(LAB_BREAKER_KEY);
+
+    const base = `http://127.0.0.1:${process.env.PORT}`;
+    const sick = `${base}/error-lab?case=flaky`;
+    const healthy = `${base}/health`;
+    const timeline = [];
+
+    const hit = async (step, url) => {
+        const startedAt = Date.now();
+        let result;
+        try {
+            const upstream = await fetchWithTimeout(url, {
+                retries: 0,
+                timeoutMs: 1000,
+                breakerKey: LAB_BREAKER_KEY,
+                breakerOptions: LAB_BREAKER_OPTIONS
+            });
+            result = `HTTP ${upstream.status}`;
+        } catch (err) {
+            result = err.code || err.message;
+        }
+
+        timeline.push({
+            step,
+            result,
+            ms: Date.now() - startedAt,
+            calledUpstream: result !== 'ERR_CIRCUIT_OPEN',
+            stateAfter: breakerFor(LAB_BREAKER_KEY, LAB_BREAKER_OPTIONS).stats().state
+        });
+    };
+
+    await hit('1 — closed: real call to a sick upstream', sick);
+    await hit('2 — closed: real call, still counting', sick);
+    await hit('3 — closed: 3rd failure crosses the threshold, breaker trips', sick);
+    await hit('4 — OPEN: rejected instantly, no HTTP request made', sick);
+    await hit('5 — OPEN: still failing fast', sick);
+
+    timeline.push({ step: `6 — waiting out the ${LAB_BREAKER_OPTIONS.openMs}ms cooldown` });
+    await sleep(LAB_BREAKER_OPTIONS.openMs + 100);
+
+    // Scout dies: one failure is enough to re-open, no second chance and no
+    // waiting for minCalls again. We already know this upstream is sick.
+    await hit('7 — HALF-OPEN: scout sent to the still-sick upstream, dies', sick);
+    await hit('8 — OPEN again: full cooldown restarts, no call made', sick);
+
+    timeline.push({ step: `9 — waiting out the cooldown a second time` });
+    await sleep(LAB_BREAKER_OPTIONS.openMs + 100);
+
+    await hit('10 — HALF-OPEN: scout sent, upstream is healthy now', healthy);
+    await hit('11 — closed again: normal traffic resumes', healthy);
+
+    return timeline;
 }
 
 app.get('/error-lab', async (req, res, next) => {
@@ -311,6 +382,21 @@ app.get('/error-lab', async (req, res, next) => {
             return;
         }
 
+        if (kind === 'breaker') {
+            return res.json({
+                reading: 'Watch ms and calledUpstream. Steps 4-5 answer in ~0ms without touching the network — that is the breaker protecting your sockets, memory and the upstream at the same time.',
+                config: LAB_BREAKER_OPTIONS,
+                timeline: await runBreakerDemo()
+            });
+        }
+
+        if (kind === 'breaker-state') {
+            return res.json({
+                note: 'Live state per upstream. Keys are origins, except the lab key. State is per process — under cluster each worker has its own view.',
+                breakers: snapshotBreakers()
+            });
+        }
+
         if (kind === 'weather-timeout') {
             try {
                 await callHangingApi();
@@ -343,7 +429,7 @@ app.get('/error-lab', async (req, res, next) => {
         }
 
         res.json({
-            usage: 'GET /error-lab?case=sync|await|float|timeout|early|stack|weather-lost|weather-cause|hang|weather-timeout|flaky|retry',
+            usage: 'GET /error-lab?case=sync|await|float|timeout|early|stack|weather-lost|weather-cause|hang|weather-timeout|flaky|retry|breaker|breaker-state',
             proof: 'This whole handler is inside try/catch. sync+await → "LAB CATCH RAN". float+timeout → catch silent, process dies. early → forgot await on SUCCESS, no crash.',
             cases: {
                 sync: 'throw in try → CATCH RUNS → JSON 500. Process lives.',
@@ -357,7 +443,9 @@ app.get('/error-lab', async (req, res, next) => {
                 hang: `accepts the connection and NEVER answers. Postman spins forever — that socket is held hostage. Ctrl-C it. Default outbound deadline elsewhere: ${DEFAULT_TIMEOUT_MS}ms.`,
                 'weather-timeout': 'calls ?case=hang through fetchWithTimeout. AbortController severs the socket at 3s → 504 ERR_UPSTREAM_TIMEOUT, cause = AbortError. Predictable failure instead of an infinite hang.',
                 flaky: 'always answers 503. This is the upstream, not the demo — call ?case=retry to hit it through the client.',
-                retry: 'calls ?case=flaky with retries: 3. Watch the terminal: 4 attempts, each waiting a RANDOM slice of a doubling window (300/600/1200ms). Run it twice — the waits differ, which is jitter. Ends 503 ERR_UPSTREAM_UNAVAILABLE.'
+                retry: 'calls ?case=flaky with retries: 3. Watch the terminal: 4 attempts, each waiting a RANDOM slice of a doubling window (300/600/1200ms). Run it twice — the waits differ, which is jitter. Ends 503 ERR_UPSTREAM_UNAVAILABLE.',
+                breaker: 'walks all three states in one request: 3 real failures trip it, calls 4-5 are rejected in ~0ms without any HTTP request, then after the cooldown ONE scout is allowed through and success closes it again.',
+                'breaker-state': 'live state, failure rate and trip count per upstream. Call it right after ?case=retry to see the real breaker counting.'
             }
         });
     } catch (e) {
