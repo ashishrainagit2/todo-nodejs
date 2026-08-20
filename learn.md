@@ -2080,19 +2080,21 @@ Early in the chain, right after `helmet()` — so **404s and rate-limited 429s g
 This project mounts morgan **twice**. Destinations and formats are different jobs.
 
 ```js
-app.use(morgan(isProduction ? 'combined' : 'dev', { skip: skipHealthCheck }));
-// ↑ line 22 — always on, writes to process.stdout
+app.use(morgan(isProduction ? morganCombined : morganDev, { skip: skipHealthCheck }));
+// ↑ line 34 — always on, writes to process.stdout
 
 if (!isProduction) {
-    app.use(morgan('combined', {
+    app.use(morgan(morganCombined, {
         stream: fs.createWriteStream(path.join(logsDir, 'access.log'), { flags: 'a' }),
         skip: skipHealthCheck
     }));
 }
-// ↑ line 30 — local only, writes to logs/access.log
+// ↑ line 42 — local only, writes to logs/access.log
 ```
 
-| | stdout (line 22) | `logs/access.log` (line 30) |
+`morganDev` / `morganCombined` are the built-in `dev` and `combined` templates with `:id` (the correlation id) added in front — see [§12b](#12b-correlation-id--asynclocalstorage-which-user-was-that).
+
+| | stdout (line 34) | `logs/access.log` (line 42) |
 |---|---|---|
 | development | yes, **`dev`** format | yes, **`combined`** format |
 | production | yes, **`combined`** format | no |
@@ -2117,7 +2119,7 @@ Status colour: green (2xx), cyan (3xx), yellow (4xx), red (5xx).
 ::1 - - [13/Aug/2026:10:55:01 +0530] "GET /api/v1/tasks HTTP/1.1" 200 482 "http://localhost:3000" "Mozilla/5.0 ..."
 ```
 
-That is why line 22 uses `combined` in production (stdout will be collected) and `dev` locally (you are reading the screen). The file logger always uses `combined` so even locally you have a greppable history.
+That is why line 34 uses `combined` in production (stdout will be collected) and `dev` locally (you are reading the screen). The file logger always uses `combined` so even locally you have a greppable history.
 
 | Format | Output | Use |
 |--------|--------|-----|
@@ -2155,7 +2157,7 @@ Morgan's default (confirmed in the package):
 var stream = opts.stream || process.stdout
 ```
 
-So line 22 never names a file. Same unmodified code, different launcher:
+So line 34 never names a file. Same unmodified code, different launcher:
 
 ```bash
 node app.js                      # → your terminal
@@ -2243,7 +2245,7 @@ On your own disk, writing `logs/access.log` yourself is also fine — the disk i
 2. **Clustering** — two Node processes appending the same file will interleave lines.
 3. **Disk full / permissions** — a failed `createWriteStream` can take logging down with the app.
 
-A clean own-server setup: keep line 22, drop the file morgan, let systemd or PM2 write and rotate. You still grep `500` the same way; you grep the journal instead of `logs/access.log`.
+A clean own-server setup: keep line 34, drop the file morgan, let systemd or PM2 write and rotate. You still grep `500` the same way; you grep the journal instead of `logs/access.log`.
 
 ---
 
@@ -2372,7 +2374,7 @@ Same idea as a phone camera vs Google Photos: the app takes the photo; the cloud
 
 | Environment | Where you look |
 |-------------|----------------|
-| Local (`!isProduction`) | Terminal (line 22) + `logs/access.log` (line 30) |
+| Local (`!isProduction`) | Terminal (line 34) + `logs/access.log` (line 42) |
 | Production | Line 22 → stdout only; no app-owned file — container disks are ephemeral |
 
 That is why the `app.js` comment names CloudWatch / Azure Monitor: **print to stdout; let the platform collect.** Azure Monitor is the same *role* on Azure; Datadog / Better Stack / Papertrail are the SaaS versions of the same idea.
@@ -2402,9 +2404,123 @@ Elasticsearch / OpenSearch **is** the "database for logs" — a search engine bu
 
 ### One-line summary
 
-**`morgan` writes one access line per finished HTTP request — line 22 always to stdout (`dev` locally, `combined` in prod); line 30 copies `combined` to `logs/access.log` only when not production. stdout/stderr are OS pipes; collectors like CloudWatch / Datadog (or systemd / PM2) capture that stream — morgan formats, they store. Morgan never logs throws outside a request. `GET /health` returns 200 only when `mongoose.connection.readyState === 1`, otherwise 503.**
+**`morgan` writes one access line per finished HTTP request — line 34 always to stdout (`dev` locally, `combined` in prod); line 42 copies `combined` to `logs/access.log` only when not production. stdout/stderr are OS pipes; collectors like CloudWatch / Datadog (or systemd / PM2) capture that stream — morgan formats, they store. Morgan never logs throws outside a request. `GET /health` returns 200 only when `mongoose.connection.readyState === 1`, otherwise 503.**
 
 See also: [`readme.md`](readme.md#api-performance--monitoring) for implemented vs remaining, [§15](#15-api-performance--observability--the-vocabulary-and-the-loop) — logging is the logs pillar of observability, not the whole thing.
+
+---
+
+## 12b. Correlation id + AsyncLocalStorage — which user was that?
+
+**Status:** ✅ built — `utils/requestContext.js`, wired in `app.js` and `middleware/auth.js`
+
+### Q: What problem does this solve?
+
+Morgan ([§12](#12-request-logging-morgan--health-check)) tells you `POST /tasks 500`. The global error handler prints a stack. Neither says **which** of the concurrent requests failed, or **whose** it was.
+
+At one request at a time that is fine — the two lines are adjacent in the terminal. Under load they are not. Node interleaves hundreds of async chains, so the error line for user A can land between unrelated lines from users B and C. You need a **correlation id**: one value stamped on every line belonging to the same request.
+
+### Q: Why not just pass `req` down?
+
+You can, for two layers. It stops scaling the moment a failure happens deep in a helper — a Mongo call, a `fetch` to a payment API — that has no business taking a `req` argument. Threading `req` through every signature is the boilerplate problem again, and one function that forgets it produces exactly the anonymous log line you were trying to avoid.
+
+`AsyncLocalStorage` (built into Node, `node:async_hooks`) solves it differently: store the value **once** when the request arrives, read it **anywhere** on that request's async chain. `await` does not lose it, and a second concurrent request gets its own separate store.
+
+### The flow
+
+```
+POST /api/v1/tasks
+   │
+   ▼
+helmet                          app.js:18
+   │
+   ▼
+requestContext                  app.js:22  (mounted)
+   │                            utils/requestContext.js:18-23  (the function)
+   │   line 19  requestId = incoming x-request-id  OR  crypto.randomUUID()
+   │   line 20  req.id = requestId
+   │   line 21  res.setHeader('X-Request-Id', ...)
+   │   line 22  als.run({ requestId, userId: null }, () => next())
+   ▼
+morgan                          app.js:27-30  (:id reads req.id, :user reads req.user)
+   │                            app.js:34  (stdout)   app.js:42  (access.log)
+   ▼
+protect                         middleware/auth.js:6
+   │   line 20  jwt.verify
+   │   line 30  setContext({ userId })   →  utils/requestContext.js:12-15
+   ▼
+controller                      controllers/task.js
+   │   awaits Mongo; the store survives because of als.run above
+   ▼
+error handler                   app.js:414
+       line 429  logWithContext('error', {...})
+                 →  utils/requestContext.js:27-35 prints
+                    {"requestId":"a1b2","userId":"6a7b","code":...}
+```
+
+Step by step:
+
+| Where | What happens |
+|-------|--------------|
+| `app.js:22` | `requestContext` runs for **every** request — reuse the caller's `x-request-id` if present, else mint a UUID; put it on `req.id` and the `X-Request-Id` response header; open the store `{ requestId, userId: null }` |
+| `app.js:27-30` | Morgan's custom `:id` token reads `req.id` and `:user` reads `req.user?._id`, so the access line starts with `<requestId> <userId>` (`-` when anonymous). Tokens are evaluated when the response **finishes**, which is why `:user` can see what `protect` set later |
+| `middleware/auth.js:30` | `setContext({ userId })` **merges** `userId` into the existing store. It does not touch `requestId`, and the response header was already sent |
+| `app.js:429` | The error handler calls `logWithContext`, which reads both fields back and prints one JSON line to stderr |
+
+### Q: Why wrap `next()` inside `als.run`?
+
+Because `run(store, fn)` makes the store visible only while `fn` — and anything it awaits — is executing. Calling `next()` inside `fn` puts the **rest of the pipeline** (CORS, the router, `protect`, the controller, the error handler) in that scope. Call `next()` after `run` returns and the store is already gone by the time Mongo answers.
+
+### Q: How does the store survive `await`, and why can't another request overwrite it?
+
+Node does not keep the store in a variable you could clobber. It keeps it **per async resource** and restores it around every callback.
+
+When you `await`, Node creates an async resource for the continuation and records which context created it. When the event loop later resumes that continuation, it restores that context first, runs your code, then puts back whatever was there before. The store is not "still set" — it is re-established each time your chain resumes.
+
+That is also why concurrency is safe. Two requests are two separate `als.run` calls, each with its own object, and each async resource remembers its own:
+
+```
+time ──────────────────────────────────────────────►
+A: run{id:a1} ─ await Mongo ············ resume{a1} ─ log a1
+B:        run{id:b2} ─ await Mongo ············ resume{b2} ─ log b2
+                        ▲ event loop interleaves here
+```
+
+At the interleave point Node **swaps** contexts; it does not merge them. A module-scoped `let currentUser = ...` would be clobbered exactly there — which is the whole reason `AsyncLocalStorage` exists instead of a global.
+
+`setContext` mutating the object (`utils/requestContext.js:12-15`) is safe for the same reason: the object reference is unique to one `run`, so `Object.assign` can only ever affect that request.
+
+⚠️ **Where propagation breaks:** a callback registered **outside** any `run`, or a pooled resource whose callback was created in a different context, sees the wrong store or none at all. That is why the morgan `:user` token (`app.js:30`) reads `req.user` rather than the store — morgan emits its line from a `res` event, and event-emitter callbacks do not always run in the context that registered them. When in doubt, read from `req` (always correct) and use the store for code that has no `req` to read.
+
+### Q: Why is `userId` sometimes `null`?
+
+Because it is only known after a JWT verifies:
+
+| Request | `requestId` | `userId` |
+|---------|-------------|----------|
+| Valid JWT, then a 400/404 | set | set, from the token payload |
+| No token / expired / tampered | set | `null` — we never learned who |
+| `POST /auth/login` that fails | set | `null` — public route |
+
+That split is the point: you still know **which** call failed even when you cannot know **who** made it.
+
+### Q: Where is the id stored?
+
+In memory only for the life of the request (the store object and `req.id`), then garbage collected. Nothing goes to Mongo — it is a debugging handle, not user data.
+
+The durable copy is in the **logs**: the Morgan access line (first column, terminal + `logs/access.log`) and, if the request failed, the JSON error line. Both carry the same id, which is the join you wanted. In production those lines ship to CloudWatch / Datadog and you filter on `requestId` there.
+
+The `X-Request-Id` response header matters for support: a user reporting "it failed" can paste the id from their response, and you find their exact request.
+
+### Q: How does this relate to microservices?
+
+Reading the incoming `x-request-id` is what makes one id span services. A gateway assigns it, each service reuses it and forwards it on outbound calls, and the whole checkout journey — auth, inventory, Stripe, the email queue — shares one filter value. Single process here, same mechanism.
+
+### One-line summary
+
+**`utils/requestContext.js` opens an `AsyncLocalStorage` store per request (`app.js:22`) holding a UUID and, once the JWT verifies (`middleware/auth.js:30`), the `userId`. Morgan prints both as `:id :user` and the global error handler prints them as JSON, so one grep on `requestId` reconstructs a single request and one grep on `userId` reconstructs everything one user did — without passing `req` into every function.**
+
+See also: [§12](#12-request-logging-morgan--health-check) for the morgan line itself, [§14](#14-centralized-error-handling--the-apperror-class) for the error JSON, [§15](#15-api-performance--observability--the-vocabulary-and-the-loop) for the remaining observability gaps (structured logs, metrics, tracing).
 
 ---
 

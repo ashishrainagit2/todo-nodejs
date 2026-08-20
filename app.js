@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
 const AppError = require('./utils/AppError');
+const { requestContext, logWithContext } = require('./utils/requestContext');
 
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -16,11 +17,21 @@ const isProduction = process.env.NODE_ENV === 'production';
 // First middleware so even errors and 404s carry the headers.
 app.use(helmet());
 
+// Correlation id + AsyncLocalStorage — must run BEFORE morgan so :id is set,
+// and wrap next() so every later await still sees this request's store.
+app.use(requestContext);
+
 // Request logging (see learn.md §12) — mounted early so 404s and 429s are logged too.
 // A health check pinged every 10s would bury real traffic.
 const skipHealthCheck = (req) => req.path === '/health';
+morgan.token('id', (req) => req.id || '-');
+// Tokens run when the response finishes, so protect has already set req.user.
+// '-' means anonymous: public route, no token, or a rejected one.
+morgan.token('user', (req) => (req.user?._id ? String(req.user._id) : '-'));
+const morganDev = ':id :user :method :url :status :response-time ms - :res[content-length]';
+const morganCombined = ':id :user :remote-addr - :remote-user [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"';
 
-app.use(morgan(isProduction ? 'combined' : 'dev', { skip: skipHealthCheck }));
+app.use(morgan(isProduction ? morganCombined : morganDev, { skip: skipHealthCheck }));
 
 // Local history only. Container disks are ephemeral, so in production we log to
 // stdout and let the platform (CloudWatch / Azure Monitor) capture it.
@@ -28,7 +39,7 @@ if (!isProduction) {
     const logsDir = path.join(__dirname, 'logs');
     fs.mkdirSync(logsDir, { recursive: true });
 
-    app.use(morgan('combined', {
+    app.use(morgan(morganCombined, {
         stream: fs.createWriteStream(path.join(logsDir, 'access.log'), { flags: 'a' }),
         skip: skipHealthCheck
     }));
@@ -358,8 +369,6 @@ app.use((req, res, next) => {
 
 const normaliseError = (err) => {
     if (err instanceof AppError) return err;
-    console.log('ASHISHRAINA999 @3 error in normaliseError :', err.name, err?.code, err.message);
-    console.log("--------------------------------");
     if (err.name === 'ValidationError') {
         // Mongoose schema validation — report per field, like our own validators do
         const errors = Object.values(err.errors).map((e) => ({
@@ -412,9 +421,16 @@ const normaliseError = (err) => {
 // Express only watches the promise the handler returns. If you do not return a promise, it will not watch for errors.
 
 app.use((err, req, res, next) => {
-    console.log('ASHISHRAINA999 @2 error in global error handler :', err);
     const error = normaliseError(err);
     const isKnown = error instanceof AppError;
+
+    // Same JSON on every failure: grep requestId to see one user's journey.
+    // userId is null if JWT never verified (no token / bad token / public route).
+    logWithContext('error', {
+        code: isKnown ? error.code : 'ERR_INTERNAL',
+        status: isKnown ? error.statusCode : 500,
+        message: isKnown ? error.message : error.message
+    });
 
     // Unknown errors are bugs: log everything, tell the client nothing
     if (!isKnown) {

@@ -57,6 +57,7 @@ All resource routes are versioned — `/api/v1/tasks`, `/api/v1/auth/login`. `GE
 - ✅ Stronger input validation — hand-rolled, shared by create / update / bulk (no library); field-level `errors[]`, trim + enum normalising, array caps, past-date and date-order rules, unknown-field rejection, `:id` checked before the DB
 - ✅ Helmet — safe HTTP headers, `app.use(helmet())` as first middleware (see [`learn.md` §10b](learn.md#10b-safe-http-headers--what-helmet-actually-does))
 - ✅ Request logging — `morgan` (`dev` locally, `combined` + `logs/access.log` in dev; stdout only in production), `/health` skipped
+- ✅ Request context — `AsyncLocalStorage` request id (`X-Request-Id`) + `userId` after JWT; morgan (`:id :user`) and the error JSON log share both
 - ✅ Health check — `GET /health` → **200** `{ status, db, uptime }`, **503** when MongoDB is not connected
 - ✅ API versioning — all routes under `/api/v1` via `routes/v1.js` + one prefix in `app.js` (see [`learn.md` §13](learn.md#13-api-versioning--apiv1))
 - ✅ Pagination — `GET /api/v1/tasks?page=&limit=` returns `{ data, page, limit, total, totalPages }` (default page 1, limit 10, max 100)
@@ -92,8 +93,17 @@ Accurate against the code (not old checklists). Next three: **indexes → escape
 - Redis-backed rate limit (in-memory breaks under cluster)
 - `app.set('trust proxy', 1)` when anything sits in front
 - Request timeout
-- Structured logs (`pino` / `winston`)
-- Metrics, tracing, Sentry, alerts
+
+### Observability
+
+Today: `morgan` access lines (terminal + `logs/access.log`) and `GET /health`. That is only a thin **logs** pillar — see [Observability — implemented vs remaining](#observability--implemented-vs-remaining).
+
+- Structured JSON logs (`pino` / `winston`) with levels — replace leftover `console.*`
+- Metrics — `prom-client` + `GET /metrics` (p50 / p95 / p99 per route; outside `/api/v1`)
+- Error tracking — Sentry (or similar) instead of raw `console.error`
+- Tracing — OpenTelemetry / APM (when more than one service)
+- Alerting — error rate or p95 on the host dashboard
+- Uptime checks — probe `/health` from outside after deploy
 
 ### Quality / ship
 
@@ -822,6 +832,7 @@ One place for **speed** (respond fast) and **observability** (know what broke in
 | Piece | What it answers | Status | Where |
 |-------|-----------------|--------|-------|
 | **Request logging** (logs pillar) | What happened to *this* request? | ✅ | `morgan` in `app.js` — stdout always; `logs/access.log` in dev only. [`learn.md` §12](learn.md#12-request-logging-morgan--health-check) |
+| **Correlation / request id** | Which of 500 concurrent users? | ✅ | `utils/requestContext.js` — ALS + `X-Request-Id`; `userId` after JWT; error logs + morgan `:id` |
 | **Health / readiness** | Is this instance fit for traffic? | ✅ | `GET /health` — 200 / 503 from `mongoose.connection.readyState` |
 | **Error log on unknown 500s** | What was the stack? | 💡 | `console.error` in the global handler — not grouped, not alerted |
 | **Structured logs** | Searchable JSON with levels | ❌ | `winston` / `pino` — replace `console.*` before deploy |
