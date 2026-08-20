@@ -8,7 +8,9 @@ const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
 const AppError = require('./utils/AppError');
-const { requestContext, logWithContext } = require('./utils/requestContext');
+const { requestContext } = require('./utils/requestContext');
+const logger = require('./utils/logger');
+const { fetchWithTimeout, DEFAULT_TIMEOUT_MS } = require('./utils/httpClient');
 
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -107,13 +109,17 @@ app.get('/health', (req, res) => {
 // GET http://localhost:3005/error-lab?case=stack
 // GET http://localhost:3005/error-lab?case=weather-lost   (wrap without cause — crime scene gone)
 // GET http://localhost:3005/error-lab?case=weather-cause  (wrap with cause — both stacks)
+// GET http://localhost:3005/error-lab?case=hang           (never answers — the danger)
+// GET http://localhost:3005/error-lab?case=weather-timeout (AbortController cuts it at 3s)
 
 function printCauseChain(err) {
     let depth = 0;
     let cur = err;
     while (cur) {
-        console.error(`\n--- chain[${depth}] ${cur.name || 'Error'}: ${cur.message}`);
-        console.error(cur.stack);
+        logger.error(
+            { depth, name: cur.name || 'Error', stack: cur.stack },
+            `chain[${depth}] ${cur.message}`
+        );
         cur = cur.cause;
         depth += 1;
     }
@@ -122,12 +128,20 @@ function printCauseChain(err) {
 // Stand-in for OpenWeather: hit a closed port so Node throws a real network error
 // (ECONNREFUSED), not an HTTP 4xx. Same lesson as a dropped TCP connection to weather.
 async function callFakeWeatherApi() {
-    const res = await fetch('http://127.0.0.1:1/v1/forecast?q=Delhi', {
-        signal: AbortSignal.timeout(3000)
-    });
+    const res = await fetchWithTimeout('http://127.0.0.1:1/v1/forecast?q=Delhi');
     if (!res.ok) {
         throw new Error(`weather HTTP ${res.status}`);
     }
+    return res.json();
+}
+
+// The lecture's scenario: the upstream ACCEPTS the connection and then never answers.
+// ?case=hang is that upstream (our own server, playing the broken inventory API).
+async function callHangingApi() {
+    const res = await fetchWithTimeout(
+        `http://127.0.0.1:${process.env.PORT}/error-lab?case=hang`,
+        { timeoutMs: 3000 }
+    );
     return res.json();
 }
 
@@ -188,7 +202,7 @@ app.get('/error-lab', async (req, res, next) => {
         if (kind === 'float') {
             // Missing await on purpose. try/catch does NOT see this.
             Promise.reject(new Error('lab: floating reject'));
-            console.log('LAB try finished for float — catch did not run. Crash comes next tick.');
+            logger.info('LAB try finished for float — catch did not run. Crash comes next tick.');
             return res.json({
                 caughtByExpress: false,
                 tryCatchRan: false,
@@ -200,7 +214,7 @@ app.get('/error-lab', async (req, res, next) => {
             setTimeout(() => {
                 throw new Error('lab: throw inside setTimeout');
             }, 100);
-            console.log('LAB try finished for timeout — catch did not run. Crash comes from the timer.');
+            logger.info('LAB try finished for timeout — catch did not run. Crash comes from the timer.');
             return res.json({
                 caughtByExpress: false,
                 tryCatchRan: false,
@@ -212,7 +226,7 @@ app.get('/error-lab', async (req, res, next) => {
             // Forgot await, but the promise SUCCEEDS. No crash — you just answered too soon.
             const slow = new Promise((resolve) => {
                 setTimeout(() => {
-                    console.log('LAB slow work finished (success). Process still alive — no crash.');
+                    logger.info('LAB slow work finished (success). Process still alive — no crash.');
                     resolve('pretend db row');
                 }, 1500);
             });
@@ -250,13 +264,37 @@ app.get('/error-lab', async (req, res, next) => {
             try {
                 await callFakeWeatherApi();
             } catch (orig) {
-                console.error('ORIGINAL network error (we will THROW IT AWAY):');
-                console.error(orig);
+                logger.error({ err: orig }, 'ORIGINAL network error (we will THROW IT AWAY)');
                 throw new AppError(
                     'Weather service unavailable',
                     503,
                     [],
                     'ERR_WEATHER_UNAVAILABLE'
+                );
+            }
+        }
+
+        if (kind === 'hang') {
+            // Deliberately never responds: no res.json, no next, no throw.
+            // This is the broken inventory API from the lecture. Called directly it
+            // ties up a socket until you give up; that is the whole point.
+            logger.warn('LAB hang: accepted the connection, will never answer');
+            return;
+        }
+
+        if (kind === 'weather-timeout') {
+            try {
+                await callHangingApi();
+            } catch (orig) {
+                // fetchWithTimeout already turned the abort into a 504 AppError.
+                // Anything else (refused, DNS) still needs wrapping here.
+                if (orig instanceof AppError) throw orig;
+                throw new AppError(
+                    'Weather service unavailable',
+                    503,
+                    [],
+                    'ERR_WEATHER_UNAVAILABLE',
+                    orig
                 );
             }
         }
@@ -276,7 +314,7 @@ app.get('/error-lab', async (req, res, next) => {
         }
 
         res.json({
-            usage: 'GET /error-lab?case=sync|await|float|timeout|early|stack|weather-lost|weather-cause',
+            usage: 'GET /error-lab?case=sync|await|float|timeout|early|stack|weather-lost|weather-cause|hang|weather-timeout',
             proof: 'This whole handler is inside try/catch. sync+await → "LAB CATCH RAN". float+timeout → catch silent, process dies. early → forgot await on SUCCESS, no crash.',
             cases: {
                 sync: 'throw in try → CATCH RUNS → JSON 500. Process lives.',
@@ -286,13 +324,15 @@ app.get('/error-lab', async (req, res, next) => {
                 early: 'forgot await on a SUCCESS → 200 too soon, process lives',
                 stack: 'compare error.stack with vs without Error.captureStackTrace',
                 'weather-lost': 'fetch dead weather host, wrap in AppError WITHOUT cause. Client 503 clean. Log: only AppError stack — ECONNREFUSED gone.',
-                'weather-cause': 'same fetch, AppError WITH cause. Client still 503 clean. Log: AppError caused by undici/ECONNREFUSED (both stacks).'
+                'weather-cause': 'same fetch, AppError WITH cause. Client still 503 clean. Log: AppError caused by undici/ECONNREFUSED (both stacks).',
+                hang: `accepts the connection and NEVER answers. Postman spins forever — that socket is held hostage. Ctrl-C it. Default outbound deadline elsewhere: ${DEFAULT_TIMEOUT_MS}ms.`,
+                'weather-timeout': 'calls ?case=hang through fetchWithTimeout. AbortController severs the socket at 3s → 504 ERR_UPSTREAM_TIMEOUT, cause = AbortError. Predictable failure instead of an infinite hang.'
             }
         });
     } catch (e) {
-        console.error('LAB CATCH RAN ===>', e.message);
+        logger.error(`LAB CATCH RAN ===> ${e.message}`);
         if (kind === 'weather-lost' || kind === 'weather-cause') {
-            console.error('Cause chain from the throw (lost = 1 frame, cause = 2+):');
+            logger.error('Cause chain from the throw (lost = 1 frame, cause = 2+)');
             printCauseChain(e);
         }
         next(e);
@@ -424,21 +464,21 @@ app.use((err, req, res, next) => {
     const error = normaliseError(err);
     const isKnown = error instanceof AppError;
 
-    // Same JSON on every failure: grep requestId to see one user's journey.
-    // userId is null if JWT never verified (no token / bad token / public route).
-    logWithContext('error', {
-        code: isKnown ? error.code : 'ERR_INTERNAL',
-        status: isKnown ? error.statusCode : 500,
-        message: isKnown ? error.message : error.message
-    });
-
-    // Unknown errors are bugs: log everything, tell the client nothing
+    // pino's mixin adds requestId + userId to every line below, so grepping one id
+    // returns the whole story — summary and stack, not just the summary.
     if (!isKnown) {
-        console.error('Unhandled error ===>', error);
-    } else if (error.cause) {
-        // Operational + chained: client still gets the tidy AppError. Logs keep the root.
-        console.error('AppError with cause (walk this in Datadog / Sentry):');
-        printCauseChain(error);
+        // Unknown errors are bugs: log the stack, tell the client nothing
+        logger.error({ err: error, code: 'ERR_INTERNAL', status: 500 }, 'unhandled error');
+    } else {
+        logger.warn(
+            { code: error.code, status: error.statusCode },
+            `handled: ${error.message}`
+        );
+
+        if (error.cause) {
+            // Operational + chained: client still gets the tidy AppError. Logs keep the root.
+            printCauseChain(error);
+        }
     }
 
     const statusCode = isKnown ? error.statusCode : 500;
@@ -465,22 +505,22 @@ app.use((err, req, res, next) => {
 
 mongoose.connect(process.env.DB_CONNECTION)
     .then(async () => {
-        console.log('Connected to database');
+        logger.info('Connected to database');
         const User = require('./models/user');
         try {
             await User.syncIndexes();
-            console.log('User indexes synced (unique email)');
+            logger.info('User indexes synced (unique email)');
         } catch (err) {
-            console.error('User index sync failed — remove duplicate emails first:', err.message);
+            logger.error({ err }, 'User index sync failed — remove duplicate emails first');
         }
     })
-    .catch((err) => console.error('Database connection error:', err.message));
+    .catch((err) => logger.error({ err }, 'Database connection error'));
 
 // Listen only when this file is the process entry (`npm start` → app.js).
 // Cluster workers require() this module and call listen() from server.js instead.
 if (require.main === module) {
     app.listen(process.env.PORT, () => {
-        console.log(`server running in ${process.env.PORT}`);
+        logger.info(`server running in ${process.env.PORT}`);
     });
 }
 
