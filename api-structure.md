@@ -52,7 +52,7 @@ flowchart TD
     subgraph EGRESS["Layer 4 · Outbound resilience — someone else's server"]
         HTTP --> DEADLINE["AbortController<br/>3s deadline → 504 ERR_UPSTREAM_TIMEOUT"]
         DEADLINE --> RETRY["retry: backoff + full jitter<br/>transient + idempotent only → 503"]
-        RETRY --> BREAK["circuit breaker<br/>NOT BUILT — every request pays full retries"]
+        RETRY --> BREAK["circuit breaker<br/>closed · open · half-open<br/>open → 503 in ~0ms, no call made"]
         BREAK --> THIRD["third-party API"]
     end
 
@@ -65,6 +65,7 @@ flowchart TD
     LIMIT -.->|"429"| FUNNEL
     DEADLINE -.->|"504"| FUNNEL
     RETRY -.->|"503"| FUNNEL
+    BREAK -.->|"503 circuit open"| FUNNEL
     NOTFOUND["404 catch-all<br/>unknown route → AppError"] -.-> FUNNEL
 
     subgraph FAIL["Layer 5 · Failure path — one exit for every error"]
@@ -76,7 +77,6 @@ flowchart TD
 
     SHAPE --> C
 
-    style BREAK fill:#4a1f1f,stroke:#a33,color:#fff
     style EDGE fill:#12233a,stroke:#3a6ea5,color:#fff
     style SURFACE fill:#123a2a,stroke:#3a9a6e,color:#fff
     style CORE fill:#2a2340,stroke:#7a5aa8,color:#fff
@@ -134,7 +134,10 @@ Two things worth reading off the diagram:
 | **Retries** | Backoff window doubles per attempt, and each wait is a random slice of it, so instances never retry in lockstep — no thundering herd | `utils/httpClient.js` | ✅ |
 | **Retry safety** | Only transient statuses retry; only idempotent methods replay; `Retry-After` overrides our maths; a caller-cancelled request never retries | `utils/httpClient.js` | ✅ |
 | **Context propagation** | The current `requestId` rides out as an `x-request-id` header, so one id spans the whole hop chain | `utils/httpClient.js` | ✅ |
-| **Circuit breaker** | Nothing trips. If an upstream is hard down for an hour, every request still burns all attempts to reach a foregone conclusion | — | ❌ |
+| **Circuit breaker** | Closed / open / half-open per upstream. Once the failure rate over a rolling window crosses the threshold it stops calling entirely — `503` in ~0ms — then one scout tests recovery after a cooldown | `utils/circuitBreaker.js` | ✅ |
+| **Failure classification** | Only health-related outcomes trip the breaker. A `404` counts as success, so other people's bad requests cannot take your dependency offline | `utils/httpClient.js` | ✅ |
+| **Shared breaker state** | The registry is per process, so under `cluster` each worker learns about an outage on its own. Shared state needs Redis | `utils/circuitBreaker.js` | ❌ |
+| **Fallbacks** | An open circuit returns 503. Stale cache or a degraded response would serve the user better | — | ❌ |
 | **Mongo timeouts** | `mongoose.connect` uses defaults — `serverSelectionTimeoutMS` 30s, no `socketTimeoutMS` | `app.js:537` | ❌ |
 | **Inbound timeout** | No `server.requestTimeout` / `headersTimeout`, so a handler that hangs holds its connection open | — | ❌ |
 | **Idempotency keys** | A client retry of `POST /tasks` creates a second task | — | ❌ |
@@ -192,6 +195,7 @@ Every log line from steps 2–9 carries the same `requestId`. That is the whole 
 | One thread, cluster, worker threads | [`learn.md` §19](learn.md#19-how-node-serves-many-users--one-thread-cluster-worker-threads) |
 | Timeouts + resource starvation | [`learn.md` §20](learn.md#20-timeouts--abortcontroller-and-resource-starvation) |
 | Retries, backoff, jitter | [`learn.md` §21](learn.md#21-retries--exponential-backoff-and-jitter) |
+| Circuit breakers + retry budgets | [`learn.md` §22](learn.md#22-circuit-breakers--closed-open-half-open-and-retry-budgets) |
 | Remaining task list | [`README.md` — Pending](README.md) |
 
-Live demos for the failure paths: `GET /error-lab` lists every case, including `?case=weather-cause` (cause chaining), `?case=weather-timeout` (the 3s deadline) and `?case=retry` (backoff + jitter).
+Live demos for the failure paths: `GET /error-lab` lists every case, including `?case=weather-cause` (cause chaining), `?case=weather-timeout` (the 3s deadline), `?case=retry` (backoff + jitter) and `?case=breaker` (all three breaker states in one request).

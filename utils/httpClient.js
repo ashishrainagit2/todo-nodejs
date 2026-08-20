@@ -1,6 +1,7 @@
 const AppError = require('./AppError');
 const logger = require('./logger');
 const { getContext } = require('./requestContext');
+const { breakerFor } = require('./circuitBreaker');
 
 // A hung upstream holds a socket, a pool slot and memory until it answers.
 // Every outbound call gets a deadline so someone else's slow server cannot
@@ -47,10 +48,16 @@ async function fetchWithTimeout(url, {
     backoffMs = DEFAULT_BACKOFF_MS,
     maxBackoffMs = MAX_BACKOFF_MS,
     retryNonIdempotent = false,
+    breakerKey,
+    breakerOptions,
     signal,
     ...options
 } = {}) {
     const method = (options.method || 'GET').toUpperCase();
+
+    // One breaker per upstream by default. Health is a property of the service,
+    // not of a single path — though a caller can scope it tighter with breakerKey.
+    const breaker = breakerFor(breakerKey || new URL(url).origin, breakerOptions);
 
     // Hand our correlation id to the next service so one id spans the whole hop chain.
     const headers = new Headers(options.headers || {});
@@ -63,6 +70,22 @@ async function fetchWithTimeout(url, {
     let lastError;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        // Asked before every attempt, so a breaker that trips mid-retry stops the
+        // remaining attempts instead of finishing a schedule we know will fail.
+        const gate = breaker.check();
+        if (!gate.allowed) {
+            throw new AppError(
+                'Upstream service unavailable',
+                503,
+                [],
+                'ERR_CIRCUIT_OPEN',
+                new Error(
+                    `circuit ${gate.state} for ${breaker.key} — no call attempted` +
+                    (gate.retryInMs ? `, retrying upstream in ${gate.retryInMs}ms` : '')
+                )
+            );
+        }
+
         // A fresh controller per attempt — a used signal stays aborted forever.
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -74,8 +97,10 @@ async function fetchWithTimeout(url, {
         try {
             const res = await fetch(url, { ...options, headers, signal: combined });
 
-            if (!RETRYABLE_STATUS.has(res.status) || attempt === maxAttempts - 1) {
-                if (RETRYABLE_STATUS.has(res.status)) {
+            if (RETRYABLE_STATUS.has(res.status)) {
+                breaker.onFailure(`status ${res.status}`);
+
+                if (attempt === maxAttempts - 1) {
                     // Out of attempts and still failing — report it as our own 503.
                     throw new AppError(
                         'Upstream service unavailable',
@@ -85,23 +110,29 @@ async function fetchWithTimeout(url, {
                         new Error(`upstream responded ${res.status} after ${maxAttempts} attempt(s)`)
                     );
                 }
-                return res;
+
+                const wait = retryAfterMs(res) ?? backoffDelay(attempt, backoffMs, maxBackoffMs);
+                logger.warn(
+                    { url, status: res.status, attempt: attempt + 1, maxAttempts, waitMs: wait },
+                    'upstream returned a retryable status — backing off'
+                );
+                await sleep(wait);
+                continue;
             }
 
-            const wait = retryAfterMs(res) ?? backoffDelay(attempt, backoffMs, maxBackoffMs);
-            logger.warn(
-                { url, status: res.status, attempt: attempt + 1, maxAttempts, waitMs: wait },
-                'upstream returned a retryable status — backing off'
-            );
-            await sleep(wait);
-            continue;
+            // Any real answer — even a 404 — proves the upstream is alive and talking.
+            // A 4xx is our request being wrong, which says nothing about its health.
+            breaker.onSuccess();
+            return res;
         } catch (orig) {
             if (orig instanceof AppError) throw orig;
 
-            // The caller cancelled (user gone, shutdown). Never retry that.
+            // The caller cancelled (user gone, shutdown). Never retry that, and never
+            // blame the upstream for it — recording it would trip the breaker on our own act.
             if (signal?.aborted) throw orig;
 
             const timedOut = controller.signal.aborted;
+            breaker.onFailure(timedOut ? 'timeout' : orig.code || orig.message);
 
             if (timedOut) {
                 logger.warn(
