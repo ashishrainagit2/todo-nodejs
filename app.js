@@ -111,6 +111,8 @@ app.get('/health', (req, res) => {
 // GET http://localhost:3005/error-lab?case=weather-cause  (wrap with cause — both stacks)
 // GET http://localhost:3005/error-lab?case=hang           (never answers — the danger)
 // GET http://localhost:3005/error-lab?case=weather-timeout (AbortController cuts it at 3s)
+// GET http://localhost:3005/error-lab?case=flaky           (always 503 — the jammed door)
+// GET http://localhost:3005/error-lab?case=retry           (4 attempts, backoff + jitter)
 
 function printCauseChain(err) {
     let depth = 0;
@@ -128,7 +130,8 @@ function printCauseChain(err) {
 // Stand-in for OpenWeather: hit a closed port so Node throws a real network error
 // (ECONNREFUSED), not an HTTP 4xx. Same lesson as a dropped TCP connection to weather.
 async function callFakeWeatherApi() {
-    const res = await fetchWithTimeout('http://127.0.0.1:1/v1/forecast?q=Delhi');
+    // retries: 0 keeps the cause-chaining demo to a single, readable failure.
+    const res = await fetchWithTimeout('http://127.0.0.1:1/v1/forecast?q=Delhi', { retries: 0 });
     if (!res.ok) {
         throw new Error(`weather HTTP ${res.status}`);
     }
@@ -140,7 +143,17 @@ async function callFakeWeatherApi() {
 async function callHangingApi() {
     const res = await fetchWithTimeout(
         `http://127.0.0.1:${process.env.PORT}/error-lab?case=hang`,
-        { timeoutMs: 3000 }
+        { timeoutMs: 3000, retries: 0 }
+    );
+    return res.json();
+}
+
+// The stadium door that jams for a few seconds: a 503 that a retry could ride out.
+// Here it never recovers, so you can watch backoff + jitter give up gracefully.
+async function callFlakyApi() {
+    const res = await fetchWithTimeout(
+        `http://127.0.0.1:${process.env.PORT}/error-lab?case=flaky`,
+        { retries: 3, backoffMs: 300 }
     );
     return res.json();
 }
@@ -282,6 +295,22 @@ app.get('/error-lab', async (req, res, next) => {
             return;
         }
 
+        if (kind === 'flaky') {
+            // The jammed stadium door. Always 503 so the retry schedule is visible.
+            // Retry-After is omitted on purpose — our backoff math takes over.
+            return res.status(503).json({
+                success: false,
+                status: 503,
+                message: 'Flaky upstream is having a moment',
+                code: 'ERR_FLAKY_UPSTREAM'
+            });
+        }
+
+        if (kind === 'retry') {
+            await callFlakyApi();
+            return;
+        }
+
         if (kind === 'weather-timeout') {
             try {
                 await callHangingApi();
@@ -314,7 +343,7 @@ app.get('/error-lab', async (req, res, next) => {
         }
 
         res.json({
-            usage: 'GET /error-lab?case=sync|await|float|timeout|early|stack|weather-lost|weather-cause|hang|weather-timeout',
+            usage: 'GET /error-lab?case=sync|await|float|timeout|early|stack|weather-lost|weather-cause|hang|weather-timeout|flaky|retry',
             proof: 'This whole handler is inside try/catch. sync+await → "LAB CATCH RAN". float+timeout → catch silent, process dies. early → forgot await on SUCCESS, no crash.',
             cases: {
                 sync: 'throw in try → CATCH RUNS → JSON 500. Process lives.',
@@ -326,7 +355,9 @@ app.get('/error-lab', async (req, res, next) => {
                 'weather-lost': 'fetch dead weather host, wrap in AppError WITHOUT cause. Client 503 clean. Log: only AppError stack — ECONNREFUSED gone.',
                 'weather-cause': 'same fetch, AppError WITH cause. Client still 503 clean. Log: AppError caused by undici/ECONNREFUSED (both stacks).',
                 hang: `accepts the connection and NEVER answers. Postman spins forever — that socket is held hostage. Ctrl-C it. Default outbound deadline elsewhere: ${DEFAULT_TIMEOUT_MS}ms.`,
-                'weather-timeout': 'calls ?case=hang through fetchWithTimeout. AbortController severs the socket at 3s → 504 ERR_UPSTREAM_TIMEOUT, cause = AbortError. Predictable failure instead of an infinite hang.'
+                'weather-timeout': 'calls ?case=hang through fetchWithTimeout. AbortController severs the socket at 3s → 504 ERR_UPSTREAM_TIMEOUT, cause = AbortError. Predictable failure instead of an infinite hang.',
+                flaky: 'always answers 503. This is the upstream, not the demo — call ?case=retry to hit it through the client.',
+                retry: 'calls ?case=flaky with retries: 3. Watch the terminal: 4 attempts, each waiting a RANDOM slice of a doubling window (300/600/1200ms). Run it twice — the waits differ, which is jitter. Ends 503 ERR_UPSTREAM_UNAVAILABLE.'
             }
         });
     } catch (e) {
