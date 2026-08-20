@@ -3803,3 +3803,100 @@ For genuinely long jobs (a minute of work, a nightly report), neither one is the
 
 See also: [§11 rate limiting](#11-rate-limiting--what-it-is-strategies-what-we-use), [§12 morgan + health check](#12-request-logging-morgan--health-check), [§15 performance & observability](#15-api-performance--observability--the-vocabulary-and-the-loop), [§16.5 backpressure](#165-surviving-traffic-spikes-with-backpressure), [§16.6 scaling with threads and processes](#166-scaling-nodejs-with-threads-processes-and-clustering).
 
+---
+
+## 20. Timeouts — `AbortController` and resource starvation
+
+**Status:** ✅ outbound HTTP — `utils/httpClient.js`; ❌ Mongo and server-level timeouts
+
+### Q: What actually goes wrong without a timeout?
+
+Not a slow page. A dead process.
+
+Picture an upstream API that normally answers in 50 ms. Today its database is melting, so it **accepts** your TCP connection and then never replies. Your `await fetch(...)` has no deadline, so Node waits. Patiently. Forever.
+
+While it waits, that one request is still holding:
+
+| Resource | Why it matters |
+|----------|----------------|
+| A socket / file descriptor | The OS caps how many you may have. Run out and *every* new connection fails, including healthy ones |
+| A connection-pool slot | Later callers queue behind a request that will never finish |
+| The request object, `req`/`res`, closures | Cannot be garbage collected while the promise is pending |
+
+Now take 100 requests a minute hitting that same broken upstream. Nothing frees. Memory climbs, descriptors run out, and your app locks up or is OOM-killed.
+
+The important part: **your code had no bug**. You let another company's slow server decide how much of your memory to consume. A timeout is how you take that decision back.
+
+### Q: How does `AbortController` fix it?
+
+It converts an unbounded hang into a **predictable failure** at a time you choose. `utils/httpClient.js`:
+
+```js
+const controller = new AbortController();
+const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+try {
+    return await fetch(url, { ...options, signal: controller.signal });
+} finally {
+    clearTimeout(timer);
+}
+```
+
+`abort()` severs the underlying socket, so `fetch` rejects instead of pending. The descriptor is released, the pool slot returns, the objects become collectable — and your process lives to serve the next user.
+
+Three details in that file that the short version misses:
+
+**`clearTimeout` in `finally`.** A pending timer keeps the event loop alive for its full duration even after the response was sent. Forget it and a 30-second timeout delays shutdown by 30 seconds.
+
+**Check `controller.signal.aborted`, not `err.name === 'AbortError'`.** Both produce an `AbortError`, but only the flag tells you it was *our deadline* rather than a caller cancelling (user navigated away, server shutting down). Different causes deserve different status codes.
+
+**`AbortSignal.any([ours, theirs])`.** Lets a caller's own signal coexist with the deadline, instead of one overwriting the other.
+
+`AbortSignal.timeout(ms)` is the one-line form when you need nothing else — it is what this project used first. The explicit controller is what you want the moment anything *other* than the clock can cancel the call.
+
+### Q: What does the client see?
+
+A timeout is not a bug in your code, so it is an operational error like any other — an `AppError` with a real status:
+
+```js
+throw new AppError('Upstream service timed out', 504, [], 'ERR_UPSTREAM_TIMEOUT', orig);
+```
+
+**504** because a dependency did not answer in time (503 fits "refused / unavailable"). The abort goes in as `cause` ([§12b](#12b-correlation-id--asynclocalstorage-which-user-was-that) shows the chain), so the client reads one clean line and your logs still say *timeout* rather than *refused*:
+
+```
+WARN  outbound request aborted on timeout   url: …/error-lab?case=hang  timeoutMs: 3000  elapsedMs: 3025
+WARN  handled: Upstream service timed out   code: ERR_UPSTREAM_TIMEOUT  status: 504
+ERROR chain[0] Upstream service timed out
+ERROR chain[1] This operation was aborted        ← AbortError
+```
+
+### Q: How do I see it happen?
+
+Two lab cases, run in this order:
+
+```
+GET http://localhost:3005/error-lab?case=hang
+GET http://localhost:3005/error-lab?case=weather-timeout
+```
+
+`?case=hang` **is** the broken upstream — it accepts the connection and deliberately never calls `res.json`, `next`, or throws. Postman spins until you cancel. Its morgan line shows `- - ms -` for status and duration, because the response never finished. That is the hostage socket, visible.
+
+`?case=weather-timeout` calls that same route through `fetchWithTimeout`. You get a `504` in **~3.0 s**, every time.
+
+### Q: What is still unprotected here?
+
+| Gap | Why it matters | Fix |
+|-----|----------------|-----|
+| **Mongo** | `mongoose.connect` uses defaults — `serverSelectionTimeoutMS` 30 s, no `socketTimeoutMS`. A query that stalls mid-flight outlives any user's patience | pass both in the connect options |
+| **Inbound requests** | If a handler hangs for any reason, Express holds that connection open indefinitely | `server.requestTimeout` / `headersTimeout` |
+| **Retry / circuit breaker** | A timeout says *this attempt* failed. It does not decide whether to retry, or when to stop hammering a service that is clearly down | retry with exponential backoff + jitter; a breaker that fails fast after N failures |
+
+A timeout is the **first** pillar, not the whole defence: it bounds one call. Retries handle transient blips, and a circuit breaker stops you turning someone else's outage into a self-inflicted flood.
+
+### One-line summary
+
+**Without a deadline, a hung upstream holds a socket, a pool slot and memory until it answers — so 100 stuck requests can exhaust descriptors or memory and kill a process that had no bug. `utils/httpClient.js` wraps every outbound `fetch` in an `AbortController` plus `setTimeout` (cleared in `finally`), turning an infinite hang into a predictable `504 ERR_UPSTREAM_TIMEOUT` with the `AbortError` kept as `cause`. Prove it with `?case=hang` (spins forever) versus `?case=weather-timeout` (fails at 3 s). Mongo timeouts, `server.requestTimeout`, retries and a circuit breaker are still open.**
+
+See also: [§12b correlation id](#12b-correlation-id--asynclocalstorage-which-user-was-that) for the `requestId` on those log lines, [§14 `AppError`](#14-centralized-error-handling--the-apperror-class) for why a timeout is an operational error, [`readme.md` — Timeouts](readme.md#timeouts-resource-starvation) for the remaining checklist.
+
