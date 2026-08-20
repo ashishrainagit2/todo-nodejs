@@ -8,7 +8,8 @@ const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
 const AppError = require('./utils/AppError');
-const { requestContext, logWithContext } = require('./utils/requestContext');
+const { requestContext } = require('./utils/requestContext');
+const logger = require('./utils/logger');
 
 
 const isProduction = process.env.NODE_ENV === 'production';
@@ -112,8 +113,10 @@ function printCauseChain(err) {
     let depth = 0;
     let cur = err;
     while (cur) {
-        console.error(`\n--- chain[${depth}] ${cur.name || 'Error'}: ${cur.message}`);
-        console.error(cur.stack);
+        logger.error(
+            { depth, name: cur.name || 'Error', stack: cur.stack },
+            `chain[${depth}] ${cur.message}`
+        );
         cur = cur.cause;
         depth += 1;
     }
@@ -188,7 +191,7 @@ app.get('/error-lab', async (req, res, next) => {
         if (kind === 'float') {
             // Missing await on purpose. try/catch does NOT see this.
             Promise.reject(new Error('lab: floating reject'));
-            console.log('LAB try finished for float — catch did not run. Crash comes next tick.');
+            logger.info('LAB try finished for float — catch did not run. Crash comes next tick.');
             return res.json({
                 caughtByExpress: false,
                 tryCatchRan: false,
@@ -200,7 +203,7 @@ app.get('/error-lab', async (req, res, next) => {
             setTimeout(() => {
                 throw new Error('lab: throw inside setTimeout');
             }, 100);
-            console.log('LAB try finished for timeout — catch did not run. Crash comes from the timer.');
+            logger.info('LAB try finished for timeout — catch did not run. Crash comes from the timer.');
             return res.json({
                 caughtByExpress: false,
                 tryCatchRan: false,
@@ -212,7 +215,7 @@ app.get('/error-lab', async (req, res, next) => {
             // Forgot await, but the promise SUCCEEDS. No crash — you just answered too soon.
             const slow = new Promise((resolve) => {
                 setTimeout(() => {
-                    console.log('LAB slow work finished (success). Process still alive — no crash.');
+                    logger.info('LAB slow work finished (success). Process still alive — no crash.');
                     resolve('pretend db row');
                 }, 1500);
             });
@@ -250,8 +253,7 @@ app.get('/error-lab', async (req, res, next) => {
             try {
                 await callFakeWeatherApi();
             } catch (orig) {
-                console.error('ORIGINAL network error (we will THROW IT AWAY):');
-                console.error(orig);
+                logger.error({ err: orig }, 'ORIGINAL network error (we will THROW IT AWAY)');
                 throw new AppError(
                     'Weather service unavailable',
                     503,
@@ -290,9 +292,9 @@ app.get('/error-lab', async (req, res, next) => {
             }
         });
     } catch (e) {
-        console.error('LAB CATCH RAN ===>', e.message);
+        logger.error(`LAB CATCH RAN ===> ${e.message}`);
         if (kind === 'weather-lost' || kind === 'weather-cause') {
-            console.error('Cause chain from the throw (lost = 1 frame, cause = 2+):');
+            logger.error('Cause chain from the throw (lost = 1 frame, cause = 2+)');
             printCauseChain(e);
         }
         next(e);
@@ -424,21 +426,21 @@ app.use((err, req, res, next) => {
     const error = normaliseError(err);
     const isKnown = error instanceof AppError;
 
-    // Same JSON on every failure: grep requestId to see one user's journey.
-    // userId is null if JWT never verified (no token / bad token / public route).
-    logWithContext('error', {
-        code: isKnown ? error.code : 'ERR_INTERNAL',
-        status: isKnown ? error.statusCode : 500,
-        message: isKnown ? error.message : error.message
-    });
-
-    // Unknown errors are bugs: log everything, tell the client nothing
+    // pino's mixin adds requestId + userId to every line below, so grepping one id
+    // returns the whole story — summary and stack, not just the summary.
     if (!isKnown) {
-        console.error('Unhandled error ===>', error);
-    } else if (error.cause) {
-        // Operational + chained: client still gets the tidy AppError. Logs keep the root.
-        console.error('AppError with cause (walk this in Datadog / Sentry):');
-        printCauseChain(error);
+        // Unknown errors are bugs: log the stack, tell the client nothing
+        logger.error({ err: error, code: 'ERR_INTERNAL', status: 500 }, 'unhandled error');
+    } else {
+        logger.warn(
+            { code: error.code, status: error.statusCode },
+            `handled: ${error.message}`
+        );
+
+        if (error.cause) {
+            // Operational + chained: client still gets the tidy AppError. Logs keep the root.
+            printCauseChain(error);
+        }
     }
 
     const statusCode = isKnown ? error.statusCode : 500;
@@ -465,22 +467,22 @@ app.use((err, req, res, next) => {
 
 mongoose.connect(process.env.DB_CONNECTION)
     .then(async () => {
-        console.log('Connected to database');
+        logger.info('Connected to database');
         const User = require('./models/user');
         try {
             await User.syncIndexes();
-            console.log('User indexes synced (unique email)');
+            logger.info('User indexes synced (unique email)');
         } catch (err) {
-            console.error('User index sync failed — remove duplicate emails first:', err.message);
+            logger.error({ err }, 'User index sync failed — remove duplicate emails first');
         }
     })
-    .catch((err) => console.error('Database connection error:', err.message));
+    .catch((err) => logger.error({ err }, 'Database connection error'));
 
 // Listen only when this file is the process entry (`npm start` → app.js).
 // Cluster workers require() this module and call listen() from server.js instead.
 if (require.main === module) {
     app.listen(process.env.PORT, () => {
-        console.log(`server running in ${process.env.PORT}`);
+        logger.info(`server running in ${process.env.PORT}`);
     });
 }
 

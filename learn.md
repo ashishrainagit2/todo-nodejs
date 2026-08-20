@@ -2129,11 +2129,11 @@ That is why line 34 uses `combined` in production (stdout will be collected) and
 
 ### What morgan does **not** do
 
-| Limit | Fix later |
-|-------|-----------|
-| Logs **requests only** — knows nothing about internal app events | Keep logging in the global error handler |
-| **Unstructured text** — fine in a terminal, painful to search in a hosting dashboard | `winston` / `pino` → JSON logs with levels |
-| No request id, so multi-line traces can't be correlated | `X-Request-Id` + custom token |
+| Limit | Fix |
+|-------|-----|
+| Logs **requests only** — knows nothing about internal app events | ✅ pino for app events ([§12c](#12c-structured-logging-with-pino--levels-json-and-why-not-consolelog)) |
+| **Unstructured text** — fine in a terminal, painful to search in a hosting dashboard | ✅ pino writes JSON with levels; morgan's own line is still text (`pino-http` would fix that too) |
+| No request id, so multi-line traces can't be correlated | ✅ `X-Request-Id` + `:id` / `:user` tokens ([§12b](#12b-correlation-id--asynclocalstorage-which-user-was-that)) |
 
 ⚠️ **Never log the `Authorization` header or request bodies.** Morgan's built-in formats don't — but a custom token makes it easy to write tokens and passwords to disk forever.
 
@@ -2452,9 +2452,10 @@ protect                         middleware/auth.js:6
 controller                      controllers/task.js
    │   awaits Mongo; the store survives because of als.run above
    ▼
-error handler                   app.js:414
-       line 429  logWithContext('error', {...})
-                 →  utils/requestContext.js:27-35 prints
+error handler                   app.js:423
+       line 429  logger.error({ err }, 'unhandled error')   (unknown bug)
+       line 433  logger.warn({ code, status }, 'handled: …') (AppError)
+                 →  utils/logger.js mixin adds
                     {"requestId":"a1b2","userId":"6a7b","code":...}
 ```
 
@@ -2465,11 +2466,63 @@ Step by step:
 | `app.js:22` | `requestContext` runs for **every** request — reuse the caller's `x-request-id` if present, else mint a UUID; put it on `req.id` and the `X-Request-Id` response header; open the store `{ requestId, userId: null }` |
 | `app.js:27-30` | Morgan's custom `:id` token reads `req.id` and `:user` reads `req.user?._id`, so the access line starts with `<requestId> <userId>` (`-` when anonymous). Tokens are evaluated when the response **finishes**, which is why `:user` can see what `protect` set later |
 | `middleware/auth.js:30` | `setContext({ userId })` **merges** `userId` into the existing store. It does not touch `requestId`, and the response header was already sent |
-| `app.js:429` | The error handler calls `logWithContext`, which reads both fields back and prints one JSON line to stderr |
+| `app.js:427-441` | The error handler logs through pino — `logger.error` with the stack for unknown bugs, `logger.warn` for handled `AppError`s. The `mixin` in `utils/logger.js` adds `requestId` + `userId` to whichever line is written |
 
 ### Q: Why wrap `next()` inside `als.run`?
 
 Because `run(store, fn)` makes the store visible only while `fn` — and anything it awaits — is executing. Calling `next()` inside `fn` puts the **rest of the pipeline** (CORS, the router, `protect`, the controller, the error handler) in that scope. Call `next()` after `run` returns and the store is already gone by the time Mongo answers.
+
+### Q: Three separate jobs — who creates the id, who carries it, who prints it?
+
+Easy to blur these together. They are different pieces of code:
+
+| Job | Who does it | Where |
+|-----|-------------|-------|
+| **Create** the id | our own code — `crypto.randomUUID()`, or reuse the caller's header | `utils/requestContext.js:19` |
+| **Carry** it across awaits | `AsyncLocalStorage` | `utils/requestContext.js:22` |
+| **Print** it on a log line | the logger — pino's `mixin` reads the store | `utils/logger.js` |
+
+`AsyncLocalStorage` creates nothing and prints nothing. It is a carrier. Remove the middleware and pino would print no id at all.
+
+### Q: Doesn't `AsyncLocalStorage` put the id in my logs automatically?
+
+No — it makes the id **reachable**, but something still has to ask for it. That was the flaw in the first version of this code:
+
+```js
+logger.warn({ code }, 'handled');            // pino mixin asks → id appears
+console.error('Unhandled error ===>', err);  // never asks → no id
+```
+
+`console.error` is Node printing your arguments. It has no idea `als` exists. So a failing request produced a summary line you could grep and a stack you could not — and the stack is the half you actually want to read.
+
+The store is like a passport in your pocket rather than in your hand: reachable, but the clerk has to ask, and `console.error` never asks.
+
+**The fix is to configure the asking once.** `utils/logger.js` gives pino a `mixin()`, which runs on **every** log call and merges its return value into the line:
+
+```js
+const logger = pino({
+    mixin() {
+        const { requestId, userId } = getContext();
+        return requestId ? { requestId, userId: userId ?? null } : {};
+    },
+    ...
+});
+```
+
+Now `logger.error(...)` anywhere in the app — controller, deep utility, the `cause` chain walker — is stamped without the caller thinking about it. Outside a request (boot, shutdown) the store is empty, so the fields are simply omitted.
+
+One failing request, after the switch:
+
+```
+e5489198-… - GET /api/v1/tasks 401 5.672 ms - 89        ← morgan
+[10:20:29] WARN: handled: Not authorized, no token       ← pino
+    requestId: "e5489198-…"
+    userId: null
+    code: "ERR_NO_TOKEN"
+    status: 401
+```
+
+Locally `pino-pretty` formats that block for reading. In production the transport is dropped and the same record is one line of JSON on stdout, where `requestId` is a real field a log platform can filter on — not text a regex has to dig out. That is the difference between morgan's line reaching Datadog (it does) and being **queryable** there (it is not).
 
 ### Q: How does the store survive `await`, and why can't another request overwrite it?
 
@@ -2518,9 +2571,94 @@ Reading the incoming `x-request-id` is what makes one id span services. A gatewa
 
 ### One-line summary
 
-**`utils/requestContext.js` opens an `AsyncLocalStorage` store per request (`app.js:22`) holding a UUID and, once the JWT verifies (`middleware/auth.js:30`), the `userId`. Morgan prints both as `:id :user` and the global error handler prints them as JSON, so one grep on `requestId` reconstructs a single request and one grep on `userId` reconstructs everything one user did — without passing `req` into every function.**
+**`utils/requestContext.js` opens an `AsyncLocalStorage` store per request (`app.js:22`) holding a UUID and, once the JWT verifies (`middleware/auth.js:30`), the `userId`. Morgan prints both as `:id :user`; pino's `mixin` in `utils/logger.js` stamps them on every log line automatically. So one grep on `requestId` reconstructs a single request — summary *and* stack — and one grep on `userId` reconstructs everything one user did, without passing `req` into every function.**
 
 See also: [§12](#12-request-logging-morgan--health-check) for the morgan line itself, [§14](#14-centralized-error-handling--the-apperror-class) for the error JSON, [§15](#15-api-performance--observability--the-vocabulary-and-the-loop) for the remaining observability gaps (structured logs, metrics, tracing).
+
+---
+
+## 12c. Structured logging with pino — levels, JSON, and why not `console.log`
+
+**Status:** ✅ built — `utils/logger.js`, used across `app.js`
+
+### Q: What is pino?
+
+A logger. You call `logger.info(...)` / `logger.warn(...)` / `logger.error(...)` instead of `console.log`, and it writes each entry as **one JSON object** with a timestamp, a level, and any fields you attach.
+
+```js
+logger.warn({ code: 'ERR_NO_TOKEN', status: 401 }, 'handled: Not authorized, no token');
+```
+
+Two arguments, and the order surprises people: **object first, message second**. The object's keys become fields on the record; the string is the human-readable summary.
+
+### Q: What was wrong with `console.log`?
+
+Nothing, for a script you are watching. Three things, for a server:
+
+| Problem | What pino does |
+|---------|----------------|
+| No **level** — everything is equal, so you cannot silence debug noise in production | `level` config; `logger.debug` disappears when level is `info` |
+| No **fields** — `console.error('failed', err)` is text, so a dashboard cannot filter on "status 500" | keys in the object are real JSON fields |
+| No **context** — nobody remembers to include the request id ([§12b](#12b-correlation-id--asynclocalstorage-which-user-was-that)) | `mixin()` adds `requestId` / `userId` to every line automatically |
+| **Synchronous** writes block the event loop under load | pino serialises fast and can write asynchronously |
+
+### Q: Levels — which one when?
+
+| Level | Use it for | In this project |
+|-------|-----------|-----------------|
+| `debug` | detail you want locally, not in production | default level locally is `debug`, so these show |
+| `info` | normal lifecycle events | boot, Mongo connected, index sync |
+| `warn` | expected failures — the client's fault, not a bug | handled `AppError`s: 401, 404, 409, 429 |
+| `error` | genuine bugs and lost data | unknown 500s (with the stack), the `cause` chain |
+| `fatal` | the process is about to die | not used yet |
+
+That `warn` vs `error` split matters: a 404 is not worth waking anyone, a 500 is. Same handler, two levels — `app.js:427-441`.
+
+### Q: Why does it look pretty locally but JSON in production?
+
+Because they have different readers. You read the terminal; a machine reads production.
+
+```js
+transport: isProduction
+    ? undefined
+    : { target: 'pino-pretty', options: { colorize: true, translateTime: 'HH:MM:ss' } }
+```
+
+Locally `pino-pretty` turns the record into an indented, coloured block:
+
+```
+[10:22:05] WARN (31856): handled: Weather service unavailable
+    requestId: "c7ff5dc3-0f5c-4eda-b287-77fdc8afa472"
+    userId: null
+    code: "ERR_WEATHER_UNAVAILABLE"
+    status: 503
+```
+
+In production the transport is dropped and the same record is **one line** of JSON on stdout, which CloudWatch / Datadog ingest as structured data — `requestId` becomes a field you filter on rather than text you regex.
+
+⚠️ `pino-pretty` is a development convenience and costs CPU. Never enable it in production; ship raw JSON and let the platform render it.
+
+### Q: Does pino replace morgan?
+
+Not here. They log different things:
+
+| | morgan | pino |
+|---|--------|------|
+| Writes | one access line per finished request | anything you choose to log |
+| Shape | text template (`:id :user :method :url :status`) | JSON object |
+| Knows about | the HTTP request/response | whatever you pass, plus the store via `mixin` |
+
+So the access trail stays text and the application logs are JSON. If you want both as JSON, `pino-http` replaces morgan — that is the one remaining item, and it is optional.
+
+### Q: What about `logger.error({ err }, 'message')`?
+
+The key `err` is special: pino serialises the error properly — type, message, and stack — instead of printing `{}` the way `JSON.stringify(error)` would. That is why the global handler uses `logger.error({ err: error, ... }, 'unhandled error')` rather than string concatenation.
+
+### One-line summary
+
+**`utils/logger.js` configures pino once: a level (`debug` locally, `info` in production), a `mixin()` that pulls `requestId` / `userId` from the request store, and `pino-pretty` only outside production. Every `console.*` in `app.js` became `logger.*`, so error stacks, the `cause` chain and boot messages are all structured and all correlated — morgan still owns the plain-text access line.**
+
+See also: [§12](#12-request-logging-morgan--health-check) for morgan, [§12b](#12b-correlation-id--asynclocalstorage-which-user-was-that) for where the fields come from, [§15](#15-api-performance--observability--the-vocabulary-and-the-loop) for what is still missing (metrics, traces, Sentry).
 
 ---
 
@@ -2994,10 +3132,10 @@ What else sits under the same umbrella even if people don’t call them pillars:
 | Piece | Job | This project |
 |-------|-----|--------------|
 | **Health / readiness** | Is this instance fit to receive traffic? | ✅ `GET /health` — 200 / 503 from `mongoose.connection.readyState` |
-| **Error tracking** | Group crashes by stack + user, alert | 💡 `console.error` only. Sentry (or similar) is the product |
+| **Error tracking** | Group crashes by stack + user, alert | 💡 `logger.error` with a stack, but no grouping. Sentry (or similar) is the product |
 | **Alerting** | Page a human when an SLI breaks | ❌ that is **monitoring** — it *uses* observability data |
 | **Profiling** | CPU, event-loop lag, heap snapshots | ❌ how you’d catch bcrypt blocking the loop ([§19](#19-how-node-serves-many-users--one-thread-cluster-worker-threads)) |
-| **Structured logs** | JSON with levels, searchable in a dashboard | ❌ still morgan text + `console.*`. `winston` / `pino` next |
+| **Structured logs** | JSON with levels, searchable in a dashboard | ✅ `pino` ([§12c](#12c-structured-logging-with-pino--levels-json-and-why-not-consolelog)) — morgan's access line is still text |
 | **Uptime checks** | Probe `/health` from outside the server | ❌ Pingdom / UptimeRobot class — after deploy |
 
 A useful split:
@@ -3011,9 +3149,9 @@ A useful split:
 |------|---------|
 | morgan → stdout (`dev` / `combined`) | `prom-client` + `GET /metrics` (p50 / p95 / p99 per route) |
 | `logs/access.log` in development | Distributed tracing (OpenTelemetry spans) |
-| `GET /health` | Sentry (or similar) instead of raw `console.error` |
+| `GET /health` | Sentry (or similar) on top of the pino stream |
 | Error handler hides 500 details in production, logs the rest | Alerting on error rate / latency |
-| | Structured JSON logs (`winston` / `pino`) |
+| Structured JSON logs — `pino` + `requestId` / `userId` ([§12c](#12c-structured-logging-with-pino--levels-json-and-why-not-consolelog)) | `pino-http` if you want the access line as JSON too |
 | | Event-loop lag / heap profiling |
 | | `app.set('trust proxy', 1)` so logged IPs are real, once anything sits in front |
 

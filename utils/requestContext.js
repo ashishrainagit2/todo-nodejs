@@ -22,16 +22,6 @@ function requestContext(req, res, next) {
     als.run({ requestId, userId: null }, () => next());
 }
 
-// Filter Datadog / the terminal on requestId. userId is null until JWT verifies
-// (and stays null on public routes / bad tokens).
-function logWithContext(label, extra = {}) {
-    const { requestId, userId } = getContext();
-    console.error(JSON.stringify({
-        label,
-        requestId: requestId || null,
-        userId: userId || null,
-        ...extra
-    }));
-}
-
-module.exports = { getContext, setContext, requestContext, logWithContext };
+// utils/logger.js reads this store in its pino mixin, so every log line carries
+// requestId + userId without any caller passing them in.
+module.exports = { getContext, setContext, requestContext };

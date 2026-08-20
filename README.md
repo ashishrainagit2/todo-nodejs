@@ -57,7 +57,8 @@ All resource routes are versioned — `/api/v1/tasks`, `/api/v1/auth/login`. `GE
 - ✅ Stronger input validation — hand-rolled, shared by create / update / bulk (no library); field-level `errors[]`, trim + enum normalising, array caps, past-date and date-order rules, unknown-field rejection, `:id` checked before the DB
 - ✅ Helmet — safe HTTP headers, `app.use(helmet())` as first middleware (see [`learn.md` §10b](learn.md#10b-safe-http-headers--what-helmet-actually-does))
 - ✅ Request logging — `morgan` (`dev` locally, `combined` + `logs/access.log` in dev; stdout only in production), `/health` skipped
-- ✅ Request context — `AsyncLocalStorage` request id (`X-Request-Id`) + `userId` after JWT; morgan (`:id :user`) and the error JSON log share both
+- ✅ Request context — `AsyncLocalStorage` request id (`X-Request-Id`) + `userId` after JWT; morgan (`:id :user`) and every pino line share both
+- ✅ Structured logs — `pino` (`utils/logger.js`); `mixin` stamps `requestId` / `userId` on every line, `pino-pretty` locally, JSON to stdout in production
 - ✅ Health check — `GET /health` → **200** `{ status, db, uptime }`, **503** when MongoDB is not connected
 - ✅ API versioning — all routes under `/api/v1` via `routes/v1.js` + one prefix in `app.js` (see [`learn.md` §13](learn.md#13-api-versioning--apiv1))
 - ✅ Pagination — `GET /api/v1/tasks?page=&limit=` returns `{ data, page, limit, total, totalPages }` (default page 1, limit 10, max 100)
@@ -98,7 +99,6 @@ Accurate against the code (not old checklists). Next three: **indexes → escape
 
 Today: `morgan` access lines (terminal + `logs/access.log`) and `GET /health`. That is only a thin **logs** pillar — see [Observability — implemented vs remaining](#observability--implemented-vs-remaining).
 
-- Structured JSON logs (`pino` / `winston`) with levels — replace leftover `console.*`
 - Metrics — `prom-client` + `GET /metrics` (p50 / p95 / p99 per route; outside `/api/v1`)
 - Error tracking — Sentry (or similar) instead of raw `console.error`
 - Tracing — OpenTelemetry / APM (when more than one service)
@@ -834,8 +834,8 @@ One place for **speed** (respond fast) and **observability** (know what broke in
 | **Request logging** (logs pillar) | What happened to *this* request? | ✅ | `morgan` in `app.js` — stdout always; `logs/access.log` in dev only. [`learn.md` §12](learn.md#12-request-logging-morgan--health-check) |
 | **Correlation / request id** | Which of 500 concurrent users? | ✅ | `utils/requestContext.js` — ALS + `X-Request-Id`; `userId` after JWT; error logs + morgan `:id` |
 | **Health / readiness** | Is this instance fit for traffic? | ✅ | `GET /health` — 200 / 503 from `mongoose.connection.readyState` |
-| **Error log on unknown 500s** | What was the stack? | 💡 | `console.error` in the global handler — not grouped, not alerted |
-| **Structured logs** | Searchable JSON with levels | ❌ | `winston` / `pino` — replace `console.*` before deploy |
+| **Error log on unknown 500s** | What was the stack? | ✅ | `logger.error({ err })` in the global handler — stamped with `requestId`; not yet grouped or alerted |
+| **Structured logs** | Searchable JSON with levels | ✅ | `pino` in `utils/logger.js` — `mixin` adds `requestId` / `userId` to every line |
 | **Metrics** (metrics pillar) | Is `GET /tasks` slower this week? | ❌ | `prom-client` + `GET /metrics` (p50 / p95 / p99). Duration in morgan is per-request, not an aggregate |
 | **Traces** (traces pillar) | Of 800 ms, how much was auth vs Mongo? | ❌ | OpenTelemetry / APM product |
 | **Error tracking** | Group crashes, notify | ❌ | Sentry (or similar) |
@@ -845,17 +845,19 @@ One place for **speed** (respond fast) and **observability** (know what broke in
 
 **Done in this Todo API:**
 
-1. ✅ **`morgan`** — `dev` locally, `combined` in production, both to stdout. Extra `combined` file only when not production.
+1. ✅ **`morgan`** — `dev` locally, `combined` in production, both to stdout. Extra `combined` file only when not production. Both formats start with `:id :user`.
 2. ✅ **`GET /health`** — skipped by morgan so probes do not bury real traffic.
-3. 💡 **Unhandled errors** printed with `console.error` (stderr); client sees a generic 500 in production.
+3. ✅ **`pino`** (`utils/logger.js`) — JSON logs with levels; a `mixin` reads the request store so **every** line carries `requestId` + `userId`. `pino-pretty` locally, raw JSON to stdout in production.
+4. ✅ **Correlation id** (`utils/requestContext.js`) — `AsyncLocalStorage` + `X-Request-Id`. See [`learn.md` §12b](learn.md#12b-correlation-id--asynclocalstorage-which-user-was-that).
+5. ✅ **Unhandled errors** logged with the stack via `logger.error`; client still sees a generic 500 in production.
 
 **Still to add (learning order):**
 
-1. **`winston` / `pino`** — JSON logs with levels; keep morgan or replace it.
-2. **`prom-client` + `GET /metrics`** — sit outside `/api/v1`, not public in production. See [`learn.md` §15](learn.md#15-api-performance--observability--the-vocabulary-and-the-loop).
-3. **Sentry** (or similar) — replace raw `console.error` once deployed.
-4. **Alerting** — error rate or p95 latency, on the hosting dashboard or APM.
-5. **Tracing** — when more than one service exists; not needed for a single Express process yet.
+1. **`prom-client` + `GET /metrics`** — sit outside `/api/v1`, not public in production. See [`learn.md` §15](learn.md#15-api-performance--observability--the-vocabulary-and-the-loop).
+2. **Sentry** (or similar) — grouping and alerting on top of the pino stream once deployed.
+3. **Alerting** — error rate or p95 latency, on the hosting dashboard or APM.
+4. **Tracing** — when more than one service exists; not needed for a single Express process yet.
+5. **`pino-http`** — optional: replaces morgan so the access line is JSON too, rather than text.
 
 ### Performance (make the API faster)
 
