@@ -1012,6 +1012,7 @@ See also: [Rate limiting](#rate-limiting) for the current library setup, `learn.
 
 | File | Topic |
 |------|-------|
+| `api-structure.md` | **API structure and features** — request-lifecycle diagram + built-vs-missing checklist per layer |
 | `authflow.md` | JWT, sign, verify, token creation |
 | `learn.md` | dotenv, cors, json, errors, routes, **headers**, **safe/security headers (Helmet)**, **rate limiting**, **task ownership / userId flow** |
 | `mongoStructure.md` | Collections, documents, linking |
