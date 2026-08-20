@@ -59,6 +59,7 @@ All resource routes are versioned — `/api/v1/tasks`, `/api/v1/auth/login`. `GE
 - ✅ Request logging — `morgan` (`dev` locally, `combined` + `logs/access.log` in dev; stdout only in production), `/health` skipped
 - ✅ Request context — `AsyncLocalStorage` request id (`X-Request-Id`) + `userId` after JWT; morgan (`:id :user`) and every pino line share both
 - ✅ Structured logs — `pino` (`utils/logger.js`); `mixin` stamps `requestId` / `userId` on every line, `pino-pretty` locally, JSON to stdout in production
+- ✅ Outbound timeouts — `utils/httpClient.js` (`AbortController` + `setTimeout`, default 3s) → `504 ERR_UPSTREAM_TIMEOUT` with the abort kept as `cause` (see [`learn.md` §20](learn.md#20-timeouts--abortcontroller-and-resource-starvation))
 - ✅ Health check — `GET /health` → **200** `{ status, db, uptime }`, **503** when MongoDB is not connected
 - ✅ API versioning — all routes under `/api/v1` via `routes/v1.js` + one prefix in `app.js` (see [`learn.md` §13](learn.md#13-api-versioning--apiv1))
 - ✅ Pagination — `GET /api/v1/tasks?page=&limit=` returns `{ data, page, limit, total, totalPages }` (default page 1, limit 10, max 100)
@@ -96,12 +97,13 @@ Accurate against the code (not old checklists). Next three: **indexes → escape
 
 ### Timeouts (resource starvation)
 
-A hung dependency holds a socket, a connection-pool slot and memory until it answers. Without a deadline, someone else's slow server decides how much of your memory to consume. ✅ already done: `AbortSignal.timeout(3000)` on the outbound `fetch` in the weather lab (`app.js:124-131`).
+A hung dependency holds a socket, a connection-pool slot and memory until it answers. Without a deadline, someone else's slow server decides how much of your memory to consume. Full walkthrough in [`learn.md` §20](learn.md#20-timeouts--abortcontroller-and-resource-starvation).
+
+✅ **Done — outbound HTTP.** `utils/httpClient.js` wraps every `fetch` in an `AbortController` + `setTimeout` (cleared in `finally`), default 3000ms via `HTTP_TIMEOUT_MS`. On our deadline it throws `504 ERR_UPSTREAM_TIMEOUT` with the `AbortError` as `cause`. Prove it: `?case=hang` spins forever, `?case=weather-timeout` fails at ~3s.
 
 - ❌ **Mongo timeouts** — `mongoose.connect` uses defaults today (`serverSelectionTimeoutMS` 30s, no `socketTimeoutMS`), so a stalled query can hang a request far longer than a user will wait
 - ❌ **Server request timeout** — `server.requestTimeout` / `headersTimeout`, so a handler that hangs for any reason cannot hold a connection open indefinitely
-- ❌ **`AbortController` on every future outbound call** — the pattern is in place for one `fetch`; anything added later (Stripe, email, webhooks) needs the same deadline, translated to a `503` with the original kept as `cause`
-- ❌ **Retry with backoff + circuit breaker** — a timeout tells you it failed; these decide whether to try again and when to stop trying entirely
+- ❌ **Retry with backoff + circuit breaker** — a timeout tells you one attempt failed; these decide whether to try again and when to stop hammering a service that is clearly down
 
 ### Observability
 
