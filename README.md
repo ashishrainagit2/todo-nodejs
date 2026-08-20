@@ -57,7 +57,7 @@ All resource routes are versioned — `/api/v1/tasks`, `/api/v1/auth/login`. `GE
 - ✅ Stronger input validation — hand-rolled, shared by create / update / bulk (no library); field-level `errors[]`, trim + enum normalising, array caps, past-date and date-order rules, unknown-field rejection, `:id` checked before the DB
 - ✅ Helmet — safe HTTP headers, `app.use(helmet())` as first middleware (see [`learn.md` §10b](learn.md#10b-safe-http-headers--what-helmet-actually-does))
 - ✅ Request logging — `morgan` (`dev` locally, `combined` + `logs/access.log` in dev; stdout only in production), `/health` skipped
-- ✅ Request context — `AsyncLocalStorage` request id (`X-Request-Id`) + `userId` after JWT; error JSON logs and morgan `:id` share it
+- ✅ Request context — `AsyncLocalStorage` request id (`X-Request-Id`) + `userId` after JWT; morgan (`:id :user`) and the error JSON log share both
 - ✅ Health check — `GET /health` → **200** `{ status, db, uptime }`, **503** when MongoDB is not connected
 - ✅ API versioning — all routes under `/api/v1` via `routes/v1.js` + one prefix in `app.js` (see [`learn.md` §13](learn.md#13-api-versioning--apiv1))
 - ✅ Pagination — `GET /api/v1/tasks?page=&limit=` returns `{ data, page, limit, total, totalPages }` (default page 1, limit 10, max 100)

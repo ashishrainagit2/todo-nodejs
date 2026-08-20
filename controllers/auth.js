@@ -20,7 +20,6 @@ exports.register = async (req, res, next) => {
             user: { id: user._id, email: user.email, role: user.role }
         });
     } catch (e) {
-        console.log('ASHISHRAINA999 @1 error in register controller ', e);
         next(e);
     }
 };
