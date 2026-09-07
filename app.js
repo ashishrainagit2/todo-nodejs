@@ -1,5 +1,6 @@
 require('dotenv/config');
 const express = require('express');
+const redis = require('./utils/redis');
 const app = express();
 const cors = require('cors');
 const helmet = require('helmet');
@@ -63,6 +64,7 @@ const allowedOrigins =
 
 app.use(cors({
     origin(origin, callback) {
+        console.log("ASHISH origin", origin)
         // Postman, curl, server-to-server — no Origin header
         if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
@@ -634,6 +636,10 @@ mongoose.connect(process.env.DB_CONNECTION)
         }
     })
     .catch((err) => logger.error({ err }, 'Database connection error'));
+    
+redis.connect()
+    .then(() => logger.info('Connected to Redis'))
+    .catch((err) => logger.error({ err }, 'Redis connection error'));
 
 // Listen only when this file is the process entry (`npm start` → app.js).
 // Cluster workers require() this module and call listen() from server.js instead.

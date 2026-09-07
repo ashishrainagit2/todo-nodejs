@@ -16,10 +16,6 @@ Questions and answers from building the Todo API — simple explanations, same s
 
 ## 1. What is `require('dotenv/config')`?
 
-**File:** `app.js` line 5
-
-### Q: What is this? Is it a package?
-
 **A:** Yes — the **`dotenv`** package (in `package.json`).
 
 It reads your **`.env`** file and loads each variable into **`process.env`**:
@@ -47,23 +43,11 @@ require('dotenv/config');           // auto-load .env (what you have)
 require('dotenv').config();         // same thing, two lines
 ```
 
-### Where your app uses it
-
-| File | Uses |
-|------|------|
-| `app.js` | `PORT`, `DB_CONNECTION`, `NODE_ENV`, `CORS_ORIGIN*` |
-| `controllers/auth.js` | `JWT_SECRET`, `JWT_EXPIRES_IN` |
-| `middleware/auth.js` | `JWT_SECRET` |
-
 **One line:** `dotenv` reads `.env` into `process.env` so secrets stay out of code.
 
 ---
 
-## 2. What is `app.use(cors())`?
-
-**File:** `app.js`
-
-### Q: What is CORS? Does bare `cors()` allow any URL?
+## 2. What is `app.use(cors())`? What is CORS? Does bare `cors()` allow any URL?
 
 **A:** **CORS** = Cross-Origin Resource Sharing.
 
@@ -107,8 +91,6 @@ app.use(cors({
 | `allowedHeaders` | Allow `Authorization` (JWT) |
 
 ---
-
-## 3. CORS in this project (configured)
 
 ### Q: Shouldn't `localhost:3000` be in `.env` too? What about the production check?
 
@@ -251,11 +233,7 @@ Logic that never changes → code**
 
 ---
 
-## 4. What is `app.use(express.json())`?
-
-**File:** `app.js`
-
-### Q: Does it intercept the response and convert to JSON?
+## 4. What is `app.use(express.json())`? Does it intercept the response and convert to JSON?
 
 **A:** **No** — it works on the **incoming request**, not the response.
 
@@ -281,11 +259,7 @@ req.body.title → "Buy milk"
 
 ---
 
-## 5. What is `app.use(express.urlencoded({ extended: true }))`?
-
-**File:** `app.js`
-
-### Q: What does this do?
+## 5. What is `app.use(express.urlencoded({ extended: true }))`? What does this do?
 
 **A:** Parses **HTML form** data into `req.body` — not JSON.
 
@@ -462,6 +436,34 @@ Since [§14](#14-centralized-error-handling--the-apperror-class), **every** fail
 ## 8. Routes → Controller → Model (`POST /auth/register`)
 
 **Goal:** Understand how one URL travels through the app — using register as the example.
+
+### MVC — why there is no `views/` folder
+
+Classic **MVC** is Model / View / Controller. This repo dropped **View** on purpose: Express does not render HTML. A separate **Next.js** app will be the view (UI + its own routing). This is the usual layout for a JSON API.
+
+```
+| Piece          | Job                                      | In this repo                          |
+|----------------|------------------------------------------|---------------------------------------|
+| **Route**      | URL + method + middleware                | `routes/`                             |
+| **Controller** | Request in, `res.json` / `next(err)` out | `controllers/`                        |
+| **Model**      | Schema + DB                              | `models/`                             |
+| **View**       | UI                                       | Next.js later — not here              |
+| **App shell**  | helmet, CORS, morgan, errors, `listen`   | `app.js` — not M, V, or C             |
+```
+
+```
+Next.js  →  GET /api/v1/tasks
+                ↓
+            routes/task.js          (protect, validateObjectId)
+                ↓
+            controllers/task.js
+                ↓
+            models/task.js          (Mongo)
+                ↓
+            JSON back to Next.js
+```
+
+Keep routes thin. Controllers talk to models. Next.js only consumes `{ data, ... }` or `{ success, status, message, code }`.
 
 ### Your understanding (correct ✅)
 
@@ -784,20 +786,40 @@ Same error message as "user not found" — don't reveal which failed.
 
 ### Step C — `jwt.sign({ userId: user._id }, ...)`
 
-Creates the token the client uses on protected routes:
+```js
+const token = jwt.sign(
+    { userId: user._id },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+);
+```
+
+This **only builds a string**. It does not write the token to Mongo. The next lines put that string in the JSON response; the **client** keeps it and sends it back as `Authorization: Bearer <token>`. `protect` runs `jwt.verify` — it does not look the token up in the database. That is why this app cannot really “log out” on the server: there is nothing stored to delete.
+
+`userId` is **not** the email. It is Mongo’s `_id` (e.g. `6a7b242f3b7877edcc1769e4`). Email is a separate field on the user document.
+
+```
+| Argument                         | What it is                                              |
+|----------------------------------|---------------------------------------------------------|
+| `{ userId: user._id }`           | **payload** — data inside the token                     |
+| `process.env.JWT_SECRET`         | **signing key** — not in the token; proves it is ours   |
+| `{ expiresIn: '7d' }`            | **lifetime** — after 7 days `jwt.verify` fails          |
+```
+
+Flow after login:
 
 ```
 POST /auth/login  →  { token: "eyJhbG..." }
         │
         ▼
-GET /tasks
+GET /api/v1/tasks
 Authorization: Bearer eyJhbG...
         │
         ▼
-protect middleware  →  jwt.verify  →  req.user
+protect  →  jwt.verify  →  decoded.userId  →  User.findById  →  req.user
 ```
 
-See [`authflow.md`](authflow.md) for full JWT deep dive.
+See [`authflow.md`](authflow.md) for the full JWT deep dive.
 
 ---
 
@@ -827,9 +849,54 @@ Postman: POST /auth/login
 
 ### One-line summary
 
-**Register = create user + hash on save. Login = find user + compare password + issue JWT.**
+**Register = store email + hashed password + role, no token. Login = find user + compare password + `jwt.sign` (a string, not saved in DB) + send it to the client.**
 
-That token is sent on every protected request (`GET /tasks`, etc.) as `Authorization: Bearer <token>`.
+That token is sent on every protected request as `Authorization: Bearer <token>`.
+
+---
+
+### Commercial apps — two tokens, both sent to the user
+
+This repo uses **one** 7-day JWT. Commercial apps use **two keys, both given to the client**. Redis keeps **only the refresh token** (a copy / hash).
+
+```
+|                | Access token                         | Refresh token                          |
+|----------------|--------------------------------------|----------------------------------------|
+| Given to user  | yes                                  | yes                                    |
+| Kept in Redis  | no                                   | yes (only this one)                    |
+| Sent to /tasks | yes (`Authorization: Bearer`)        | no                                     |
+| Sent to /refresh | no                                 | yes                                    |
+| Lifetime       | ~15 minutes                          | days/weeks                             |
+```
+
+**Login**
+
+```
+create access_token  (short JWT, same idea as now)
+create refresh_token
+        ↓
+send BOTH to the user
+store refresh_token in Redis  (refresh:abc123 → userId)
+do not store access_token in Redis
+```
+
+**Access still valid** — `/tasks` uses access_token only. Redis is not involved.
+
+**Access expired**
+
+```
+POST /auth/refresh
+user sends refresh_token  (cookie or body)
+        ↓
+compare with Redis
+        ↓
+match  →  create a new access_token  →  send it to the user
+no match / key deleted  →  401, login again
+```
+
+**Why Redis at all?** The access JWT cannot be deleted — it works until the clock runs out. Logout = `DEL` the Redis refresh key. The user still holds the old refresh string, but `/refresh` fails because Redis no longer has it.
+
+This project does **not** implement this yet.
 
 ---
 
