@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const User = require('../models/user');
 const AppError = require('../utils/AppError');
+const redis = require('../utils/redis');
 
 exports.register = async (req, res, next) => {
     try {
@@ -38,17 +39,78 @@ exports.login = async (req, res, next) => {
             throw new AppError('Invalid credentials', 401, [], 'ERR_INVALID_CREDENTIALS');
         }
 
-        const token = jwt.sign(
-            { userId: user._id },
-            process.env.JWT_SECRET,
-            { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+        const access_token = jwt.sign(
+            { userId: user._id, type: 'access'},
+            process.env.JWT_ACCESS_SECRET,
+            { expiresIn: process.env.JWT_ACCESS_TOKEN_EXPIRES_IN || '15m' }
         );
+
+        const refresh_token = jwt.sign(
+            { userId: user._id, type: 'refresh' },
+            process.env.JWT_REFRESH_SECRET,
+            { expiresIn: process.env.JWT_REFRESH_TOKEN_EXPIRES_IN || '7d' }
+        );
+
+        await redis.set(`refresh:${refresh_token}`, String(user._id), {
+            EX: 7 * 24 * 60 * 60   // 7 days, seconds
+        });
 
         res.status(200).json({
             message: 'Login successful',
-            token,
+            access_token,
+            refresh_token,
             user: { id: user._id, email: user.email, role: user.role }
         });
+    } catch (e) {
+        next(e);
+    }
+};
+
+exports.refresh = async (req, res, next) => {
+    try {
+        const { refresh_token } = req.body ?? {};
+        if (!refresh_token) {
+            throw new AppError('Refresh token required', 401, [], 'ERR_NO_TOKEN');
+        }
+
+        let decoded;
+        try {
+            decoded = jwt.verify(refresh_token, process.env.JWT_REFRESH_SECRET);
+        } catch (e) {
+            throw new AppError('Not authorized, invalid token', 401, [], 'ERR_INVALID_TOKEN');
+        }
+
+        if (decoded.type !== 'refresh') {
+            throw new AppError('Not authorized, invalid token', 401, [], 'ERR_INVALID_TOKEN');
+        }
+
+        const userId = await redis.get(`refresh:${refresh_token}`);
+        if (!userId) {
+            throw new AppError('Not authorized, invalid token', 401, [], 'ERR_INVALID_TOKEN');
+        }
+
+        const access_token = jwt.sign(
+            { userId: decoded.userId, type: 'access' },
+            process.env.JWT_ACCESS_SECRET,
+            { expiresIn: process.env.JWT_ACCESS_TOKEN_EXPIRES_IN || '15m' }
+        );
+
+        res.status(200).json({ access_token });
+    } catch (e) {
+        next(e);
+    }
+};
+
+exports.logout = async (req, res, next) => {
+    try {
+        const { refresh_token } = req.body ?? {};
+        if (!refresh_token) {
+            throw new AppError('Refresh token required', 401, [], 'ERR_NO_TOKEN');
+        }
+
+        await redis.del(`refresh:${refresh_token}`);
+
+        res.status(200).json({ message: 'Logged out' });
     } catch (e) {
         next(e);
     }

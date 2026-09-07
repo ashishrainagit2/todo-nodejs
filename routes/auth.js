@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 
-const { register, login } = require('../controllers/auth');
+const { register, login, refresh, logout } = require('../controllers/auth');
 
 /**
  * @openapi
@@ -98,5 +98,9 @@ router.post('/register', register);
  *         $ref: '#/components/responses/ServerError'
  */
 router.post('/login', login);
+
+router.post('/refresh', refresh);
+
+router.post('/logout', logout)
 
 module.exports = router;
