@@ -99,6 +99,19 @@ exports.refresh = async (req, res, next) => {
 
         const userId = await redis.get(`refresh:${hashToken(refresh_token)}`);
         if (!userId) {
+            const uid = String(decoded.userId);
+            const setKey = `user:${uid}:refresh`;
+            const hashes = await redis.sMembers(setKey);
+            if (hashes.length) {
+                await redis.del(hashes.map((h) => `refresh:${h}`));
+            }
+            await redis.del(setKey);
+            res.clearCookie('refresh_token', {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'lax',
+                path: '/'
+            });
             throw new AppError('Not authorized, invalid token', 401, [], 'ERR_INVALID_TOKEN');
         }
 
