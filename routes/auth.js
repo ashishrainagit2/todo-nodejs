@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 const { protect } = require('../middleware/auth');
-const { register, login, refresh, logout, logoutAll, changePassword, sendVerifyEmail, verifyEmail } = require('../controllers/auth');
+const { register, login, refresh, logout, logoutAll, changePassword, sendVerifyEmail, verifyEmail, sendVerifyPhone, verifyPhone } = require('../controllers/auth');
 
 /**
  * @openapi
@@ -154,5 +154,57 @@ router.post('/verify-email/send', protect, sendVerifyEmail);
  *         $ref: '#/components/responses/ServerError'
  */
 router.post('/verify-email', verifyEmail);
+
+/**
+ * @openapi
+ * /auth/verify-phone/send:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Send a phone verification OTP
+ *     description: Logged in. Empty body. SMS goes to the phone saved at register. Login does not require a verified phone.
+ *     responses:
+ *       200:
+ *         description: SMS sent, or already verified
+ *       400:
+ *         description: No phone on this account
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       502:
+ *         description: Twilio send failed
+ *       503:
+ *         description: Twilio env not set
+ *       429:
+ *         $ref: '#/components/responses/TooManyRequests'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.post('/verify-phone/send', protect, sendVerifyPhone);
+
+/**
+ * @openapi
+ * /auth/verify-phone:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Confirm phone with the OTP
+ *     description: Logged in. Body is the code from the SMS. Twilio checks it.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/VerifyPhoneRequest'
+ *     responses:
+ *       200:
+ *         description: Phone marked verified
+ *       400:
+ *         description: Missing, invalid, or expired code
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       429:
+ *         $ref: '#/components/responses/TooManyRequests'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.post('/verify-phone', protect, verifyPhone);
 
 module.exports = router;
