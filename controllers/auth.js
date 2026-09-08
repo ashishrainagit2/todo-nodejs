@@ -54,9 +54,13 @@ exports.login = async (req, res, next) => {
             { expiresIn: process.env.JWT_REFRESH_TOKEN_EXPIRES_IN || '7d' }
         );
 
-        await redis.set(`refresh:${hashToken(refresh_token)}`, String(user._id), {
+        const hash = hashToken(refresh_token);
+        const userId = String(user._id);
+
+        await redis.set(`refresh:${hash}`, userId, {
             EX: 7 * 24 * 60 * 60
         });
+        await redis.sAdd(`user:${userId}:refresh`, hash);
 
         res.status(200).json({
             message: 'Login successful',
@@ -104,13 +108,18 @@ exports.refresh = async (req, res, next) => {
             { expiresIn: process.env.JWT_REFRESH_TOKEN_EXPIRES_IN || '7d' }
         );
 
-        await redis.del(`refresh:${hashToken(refresh_token)}`);
+        const oldHash = hashToken(refresh_token);
+        const newHash = hashToken(new_refresh_token);
+        const uid = String(decoded.userId);
 
-        await redis.set(`refresh:${hashToken(new_refresh_token)}`, String(decoded.userId), {
+        await redis.del(`refresh:${oldHash}`);
+        await redis.sRem(`user:${uid}:refresh`, oldHash);
+
+        await redis.set(`refresh:${newHash}`, uid, {
             EX: 7 * 24 * 60 * 60
         });
+        await redis.sAdd(`user:${uid}:refresh`, newHash);
 
-        res.status(200).json({ access_token });
         res.status(200).json({ access_token, refresh_token: new_refresh_token });
 
     } catch (e) {
@@ -125,9 +134,29 @@ exports.logout = async (req, res, next) => {
             throw new AppError('Refresh token required', 401, [], 'ERR_NO_TOKEN');
         }
 
-        await redis.del(`refresh:${hashToken(refresh_token)}`);
+        const hash = hashToken(refresh_token);
+        const uid = await redis.get(`refresh:${hash}`);
+        await redis.del(`refresh:${hash}`);
+        if (uid) await redis.sRem(`user:${uid}:refresh`, hash);
 
         res.status(200).json({ message: 'Logged out' });
+    } catch (e) {
+        next(e);
+    }
+};
+
+exports.logoutAll = async (req, res, next) => {
+    try {
+        const userId = String(req.user._id);
+        const setKey = `user:${userId}:refresh`;
+        const hashes = await redis.sMembers(setKey);
+
+        if (hashes.length) {
+            await redis.del(hashes.map((h) => `refresh:${h}`));
+        }
+        await redis.del(setKey);
+
+        res.status(200).json({ message: 'Logged out from all devices' });
     } catch (e) {
         next(e);
     }
