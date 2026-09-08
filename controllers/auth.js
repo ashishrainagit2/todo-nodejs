@@ -4,6 +4,8 @@ const User = require('../models/user');
 const AppError = require('../utils/AppError');
 const redis = require('../utils/redis');
 const hashToken = require('../utils/hashToken');
+const { sendMail } = require('../utils/mailer');
+const crypto = require('crypto');
 
 exports.register = async (req, res, next) => {
     try {
@@ -277,6 +279,59 @@ exports.changePassword = async (req, res, next) => {
         });
 
         res.status(200).json({ message: 'Password changed. Please login.' });
+    } catch (e) {
+        next(e);
+    }
+};
+
+exports.sendVerifyEmail = async (req, res, next) => {
+    try {
+        if (!req.user.email) {
+            throw new AppError('No email on this account', 400, [], 'ERR_VALIDATION');
+        }
+        if (req.user.emailVerified) {
+            return res.status(200).json({ message: 'Email already verified' });
+        }
+
+        const token = crypto.randomBytes(32).toString('hex');
+        await redis.set(`verify:${hashToken(token)}`, String(req.user._id), {
+            EX: 24 * 60 * 60
+        });
+
+        const link = `${process.env.FRONTEND_URL}/verify-email?token=${token}`;
+        await sendMail({
+            to: req.user.email,
+            subject: 'Verify your email',
+            text: `Verify your email: ${link}`,
+            html: `<p><a href="${link}">Verify your email</a></p>`
+        });
+
+        res.status(200).json({ message: 'Verification email sent' });
+    } catch (e) {
+        next(e);
+    }
+};
+
+exports.verifyEmail = async (req, res, next) => {
+    try {
+        const token = req.body?.token;
+        if (!token) {
+            throw new AppError('Token required', 400, [], 'ERR_VALIDATION');
+        }
+
+        const key = `verify:${hashToken(token)}`;
+        const userId = await redis.get(key);
+        if (!userId) {
+            throw new AppError('Invalid or expired token', 400, [], 'ERR_INVALID_TOKEN');
+        }
+
+        const user = await User.findByIdAndUpdate(userId, { emailVerified: true });
+        await redis.del(key);
+        if (!user) {
+            throw new AppError('User no longer exists', 401, [], 'ERR_USER_GONE');
+        }
+
+        res.status(200).json({ message: 'Email verified' });
     } catch (e) {
         next(e);
     }

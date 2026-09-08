@@ -136,7 +136,20 @@ const components = {
                 id: { type: 'string', example: '6a7b242f3b7877edcc1769e4' },
                 email: { type: 'string', example: 'user@example.com' },
                 phone: { type: 'string', example: '9876543210' },
-                role: { type: 'string', example: 'user' }
+                role: { type: 'string', example: 'user' },
+                emailVerified: { type: 'boolean', example: false }
+            }
+        },
+
+        VerifyEmailRequest: {
+            type: 'object',
+            required: ['token'],
+            properties: {
+                token: {
+                    type: 'string',
+                    description: 'Raw token from the email link query string',
+                    example: 'a1b2c3...'
+                }
             }
         },
 
