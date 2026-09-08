@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 const { protect } = require('../middleware/auth');
-const { register, login, refresh, logout, logoutAll, changePassword } = require('../controllers/auth');
+const { register, login, refresh, logout, logoutAll, changePassword, sendVerifyEmail, verifyEmail } = require('../controllers/auth');
 
 /**
  * @openapi
@@ -107,5 +107,52 @@ router.post('/logout', logout);
 router.post('/logout-all', protect, logoutAll);
 
 router.post('/change-password', protect, changePassword);
+
+/**
+ * @openapi
+ * /auth/verify-email/send:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Send a verification email
+ *     description: Logged in. Empty body. Emails a link to req.user.email. Login does not require a verified email — users can onboard first and verify later.
+ *     responses:
+ *       200:
+ *         description: Mail sent, or already verified
+ *       400:
+ *         description: No email on this account
+ *       401:
+ *         $ref: '#/components/responses/Unauthorized'
+ *       429:
+ *         $ref: '#/components/responses/TooManyRequests'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.post('/verify-email/send', protect, sendVerifyEmail);
+
+/**
+ * @openapi
+ * /auth/verify-email:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Confirm email from the link token
+ *     description: Public. Frontend reads token from the URL and POSTs it here. No Bearer token.
+ *     security: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/VerifyEmailRequest'
+ *     responses:
+ *       200:
+ *         description: Email marked verified
+ *       400:
+ *         description: Missing, invalid, or expired token
+ *       429:
+ *         $ref: '#/components/responses/TooManyRequests'
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
+router.post('/verify-email', verifyEmail);
 
 module.exports = router;
