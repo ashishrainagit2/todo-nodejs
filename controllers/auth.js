@@ -3,9 +3,7 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/user');
 const AppError = require('../utils/AppError');
 const redis = require('../utils/redis');
-const crypto = require('crypto');
-
-const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex')
+const hashToken = require('../utils/hashToken');
 
 exports.register = async (req, res, next) => {
     try {
@@ -168,6 +166,16 @@ exports.logout = async (req, res, next) => {
         const uid = await redis.get(`refresh:${hash}`);
         await redis.del(`refresh:${hash}`);
         if (uid) await redis.sRem(`user:${uid}:refresh`, hash);
+
+        const access = req.headers.authorization?.startsWith('Bearer ')
+            ? req.headers.authorization.split(' ')[1]
+            : null;
+
+        if (access) {
+            const decoded = jwt.decode(access);
+            const ttl = Math.max((decoded?.exp ?? 0) - Math.floor(Date.now() / 1000), 1);
+            await redis.set(`access:${hashToken(access)}`, '1', { EX: ttl });
+        }
 
         res.clearCookie('refresh_token', {
             httpOnly: true,
