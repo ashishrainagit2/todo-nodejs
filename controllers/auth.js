@@ -12,7 +12,7 @@ exports.register = async (req, res, next) => {
     try {
         const email = req.body?.email?.trim() || undefined;
         const phone = req.body?.phone?.trim() || undefined;
-        const { password, role } = req.body ?? {};
+        const { password } = req.body ?? {};
 
         if (!email || !phone) {
             throw new AppError('Email and phone required', 400, [
@@ -38,7 +38,7 @@ exports.register = async (req, res, next) => {
             }
         }
 
-        const user = await User.create({ email, phone, password, role });
+        const user = await User.create({ email, phone, password });
         res.status(201).json({
             message: 'User created successfully. Please login.',
             user: { id: user._id, email: user.email, phone: user.phone, role: user.role }

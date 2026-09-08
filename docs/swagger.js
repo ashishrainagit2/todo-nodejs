@@ -110,12 +110,7 @@ const components = {
             properties: {
                 email: { type: 'string', format: 'email', example: 'user@example.com' },
                 phone: { type: 'string', example: '9876543210' },
-                password: { type: 'string', format: 'password', example: 'secret123' },
-                role: {
-                    type: 'string',
-                    enum: ['admin', 'user', 'manager'],
-                    default: 'user'
-                }
+                password: { type: 'string', format: 'password', example: 'secret123' }
             }
         },
 

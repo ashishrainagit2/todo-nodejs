@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "browserslist": "^4.28.9",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
