@@ -3,6 +3,7 @@ const express = require('express');
 const redis = require('./utils/redis');
 const app = express();
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const fs = require('fs');
@@ -79,6 +80,7 @@ app.use(cors({
 }));
 
 // express.json() parses JSON from incoming requests into req.body — it's for reading what the client sends, not for converting the response.
+app.use(cookieParser());
 app.use(express.json());
 // Same idea as express.json(), but for form-encoded bodies.
 // One line: Parses form-style request bodies into req.body — backup for non-JSON submissions.
