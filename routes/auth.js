@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 const { protect } = require('../middleware/auth');
-const { register, login, refresh, logout, logoutAll } = require('../controllers/auth');
+const { register, login, refresh, logout, logoutAll, changePassword } = require('../controllers/auth');
 
 /**
  * @openapi
@@ -105,5 +105,7 @@ router.post('/refresh', refresh);
 router.post('/logout', logout);
 
 router.post('/logout-all', protect, logoutAll);
+
+router.post('/change-password', protect, changePassword);
 
 module.exports = router;
