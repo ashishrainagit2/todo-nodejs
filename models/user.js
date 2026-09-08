@@ -4,11 +4,18 @@ const bcrypt = require('bcryptjs');
 const UserSchema = mongoose.Schema({
     email: {
         type: String,
-        required: true,
         unique: true,
+        sparse: true,
         lowercase: true,
         trim: true,
         match: [/^\S+@\S+\.\S+$/, 'email must be a valid email address']
+    },
+    phone: {
+        type: String,
+        unique: true,
+        sparse: true,
+        trim: true,
+        match: [/^\+?[0-9]{10,15}$/, 'phone must be 10–15 digits']
     },
     password: {
         type: String,
@@ -18,6 +25,12 @@ const UserSchema = mongoose.Schema({
         type: String,
         enum: ['admin', 'user', 'manager'],
         default: 'user'
+    }
+});
+
+UserSchema.pre('validate', function () {
+    if (!this.email && !this.phone) {
+        this.invalidate('email', 'email or phone is required');
     }
 });
 
