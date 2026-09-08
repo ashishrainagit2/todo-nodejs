@@ -7,19 +7,38 @@ const hashToken = require('../utils/hashToken');
 
 exports.register = async (req, res, next) => {
     try {
-        const { email, password, role } = req.body ?? {};
+        const email = req.body?.email?.trim() || undefined;
+        const phone = req.body?.phone?.trim() || undefined;
+        const { password, role } = req.body ?? {};
 
-        const existingUser = await User.findOne({ email });
-        if (existingUser) {
-            throw new AppError('Email already registered', 409, [
-                { field: 'email', message: 'email is already registered' }
-            ], 'ERR_EMAIL_TAKEN');
+        if (!email && !phone) {
+            throw new AppError('Email or phone required', 400, [
+                { field: 'email', message: 'provide email or phone' }
+            ], 'ERR_VALIDATION');
         }
 
-        const user = await User.create({ email, password, role });
+        if (email) {
+            const existingEmail = await User.findOne({ email });
+            if (existingEmail) {
+                throw new AppError('Email already registered', 409, [
+                    { field: 'email', message: 'email is already registered' }
+                ], 'ERR_EMAIL_TAKEN');
+            }
+        }
+
+        if (phone) {
+            const existingPhone = await User.findOne({ phone });
+            if (existingPhone) {
+                throw new AppError('Phone already registered', 409, [
+                    { field: 'phone', message: 'phone is already registered' }
+                ], 'ERR_PHONE_TAKEN');
+            }
+        }
+
+        const user = await User.create({ email, phone, password, role });
         res.status(201).json({
             message: 'User created successfully. Please login.',
-            user: { id: user._id, email: user.email, role: user.role }
+            user: { id: user._id, email: user.email, phone: user.phone, role: user.role }
         });
     } catch (e) {
         next(e);
@@ -28,8 +47,15 @@ exports.register = async (req, res, next) => {
 
 exports.login = async (req, res, next) => {
     try {
-        const { email, password } = req.body ?? {};
-        const user = await User.findOne({ email });
+        const email = req.body?.email?.trim() || undefined;
+        const phone = req.body?.phone?.trim() || undefined;
+        const { password } = req.body ?? {};
+
+        if (!email && !phone) {
+            throw new AppError('Email or phone required', 400, [], 'ERR_VALIDATION');
+        }
+
+        const user = await User.findOne(email ? { email } : { phone });
         if (!user) {
             // same message for unknown email and wrong password — don't reveal which
             throw new AppError('Invalid credentials', 401, [], 'ERR_INVALID_CREDENTIALS');
@@ -70,7 +96,7 @@ exports.login = async (req, res, next) => {
         res.status(200).json({
             message: 'Login successful',
             access_token,
-            user: { id: user._id, email: user.email, role: user.role }
+            user: { id: user._id, email: user.email, phone: user.phone, role: user.role }
         });
     } catch (e) {
         next(e);

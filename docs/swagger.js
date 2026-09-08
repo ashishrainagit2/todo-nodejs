@@ -106,9 +106,10 @@ const components = {
 
         RegisterRequest: {
             type: 'object',
-            required: ['email', 'password'],
+            required: ['password'],
             properties: {
                 email: { type: 'string', format: 'email', example: 'user@example.com' },
+                phone: { type: 'string', example: '9876543210' },
                 password: { type: 'string', format: 'password', example: 'secret123' },
                 role: {
                     type: 'string',
@@ -120,9 +121,10 @@ const components = {
 
         LoginRequest: {
             type: 'object',
-            required: ['email', 'password'],
+            required: ['password'],
             properties: {
                 email: { type: 'string', format: 'email', example: 'user@example.com' },
+                phone: { type: 'string', example: '9876543210' },
                 password: { type: 'string', format: 'password', example: 'secret123' }
             }
         },
@@ -133,6 +135,7 @@ const components = {
             properties: {
                 id: { type: 'string', example: '6a7b242f3b7877edcc1769e4' },
                 email: { type: 'string', example: 'user@example.com' },
+                phone: { type: 'string', example: '9876543210' },
                 role: { type: 'string', example: 'user' }
             }
         },
