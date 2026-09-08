@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/user');
 const AppError = require('../utils/AppError');
+const redis = require('../utils/redis');
+const hashToken = require('../utils/hashToken');
 const { setContext } = require('../utils/requestContext');
 
 exports.protect = async (req, res, next) => {
@@ -29,11 +31,14 @@ exports.protect = async (req, res, next) => {
         return next(new AppError('Not authorized, invalid token', 401, [], 'ERR_INVALID_TOKEN'));
     }
 
-    // JWT payload is enough to stamp the user on this request's async context
-    // (even if the DB row is gone a moment later).
-    setContext({ userId: String(decoded.userId) });
-
     try {
+        const blocked = await redis.get(`access:${hashToken(token)}`);
+        if (blocked) {
+            throw new AppError('Not authorized, invalid token', 401, [], 'ERR_INVALID_TOKEN');
+        }
+
+        setContext({ userId: String(decoded.userId) });
+
         const user = await User.findById(decoded.userId).select('-password');
         if (!user) {
             throw new AppError('User no longer exists', 401, [], 'ERR_USER_GONE');
@@ -42,7 +47,6 @@ exports.protect = async (req, res, next) => {
         req.user = user;
         next();
     } catch (e) {
-        // a DB failure here is a real error, so let the global handler decide
         next(e);
     }
 };
