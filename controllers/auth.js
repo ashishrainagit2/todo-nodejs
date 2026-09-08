@@ -206,3 +206,44 @@ exports.logoutAll = async (req, res, next) => {
         next(e);
     }
 };
+
+exports.changePassword = async (req, res, next) => {
+    try {
+        const { currentPassword, newPassword } = req.body ?? {};
+        if (!currentPassword || !newPassword) {
+            throw new AppError('Current and new password required', 400, [], 'ERR_VALIDATION');
+        }
+
+        const user = await User.findById(req.user._id);
+        if (!user) {
+            throw new AppError('User no longer exists', 401, [], 'ERR_USER_GONE');
+        }
+
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        if (!isMatch) {
+            throw new AppError('Invalid credentials', 401, [], 'ERR_INVALID_CREDENTIALS');
+        }
+
+        user.password = newPassword;
+        await user.save();
+
+        const userId = String(user._id);
+        const setKey = `user:${userId}:refresh`;
+        const hashes = await redis.sMembers(setKey);
+        if (hashes.length) {
+            await redis.del(hashes.map((h) => `refresh:${h}`));
+        }
+        await redis.del(setKey);
+
+        res.clearCookie('refresh_token', {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            path: '/'
+        });
+
+        res.status(200).json({ message: 'Password changed. Please login.' });
+    } catch (e) {
+        next(e);
+    }
+};
