@@ -62,10 +62,16 @@ exports.login = async (req, res, next) => {
         });
         await redis.sAdd(`user:${userId}:refresh`, hash);
 
+        res.cookie('refresh_token', refresh_token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+            path: '/'
+        });
         res.status(200).json({
             message: 'Login successful',
             access_token,
-            refresh_token,
             user: { id: user._id, email: user.email, role: user.role }
         });
     } catch (e) {
@@ -75,7 +81,7 @@ exports.login = async (req, res, next) => {
 
 exports.refresh = async (req, res, next) => {
     try {
-        const { refresh_token } = req.body ?? {};
+        const refresh_token = req.cookies?.refresh_token || req.body?.refresh_token;
         if (!refresh_token) {
             throw new AppError('Refresh token required', 401, [], 'ERR_NO_TOKEN');
         }
@@ -120,7 +126,18 @@ exports.refresh = async (req, res, next) => {
         });
         await redis.sAdd(`user:${uid}:refresh`, newHash);
 
-        res.status(200).json({ access_token, refresh_token: new_refresh_token });
+        res.cookie('refresh_token', new_refresh_token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+            path: '/'
+        });
+
+
+        res.status(200).json({
+            access_token
+        });
 
     } catch (e) {
         next(e);
@@ -129,7 +146,7 @@ exports.refresh = async (req, res, next) => {
 
 exports.logout = async (req, res, next) => {
     try {
-        const { refresh_token } = req.body ?? {};
+        const refresh_token = req.cookies?.refresh_token || req.body?.refresh_token;
         if (!refresh_token) {
             throw new AppError('Refresh token required', 401, [], 'ERR_NO_TOKEN');
         }
@@ -139,7 +156,15 @@ exports.logout = async (req, res, next) => {
         await redis.del(`refresh:${hash}`);
         if (uid) await redis.sRem(`user:${uid}:refresh`, hash);
 
+        res.clearCookie('refresh_token', {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            path: '/'
+        });
+
         res.status(200).json({ message: 'Logged out' });
+        // client needs to drop access token
     } catch (e) {
         next(e);
     }
@@ -155,6 +180,13 @@ exports.logoutAll = async (req, res, next) => {
             await redis.del(hashes.map((h) => `refresh:${h}`));
         }
         await redis.del(setKey);
+
+        res.clearCookie('refresh_token', {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'lax',
+            path: '/'
+        });
 
         res.status(200).json({ message: 'Logged out from all devices' });
     } catch (e) {
