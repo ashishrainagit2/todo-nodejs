@@ -3,6 +3,9 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/user');
 const AppError = require('../utils/AppError');
 const redis = require('../utils/redis');
+const crypto = require('crypto');
+
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex')
 
 exports.register = async (req, res, next) => {
     try {
@@ -51,8 +54,8 @@ exports.login = async (req, res, next) => {
             { expiresIn: process.env.JWT_REFRESH_TOKEN_EXPIRES_IN || '7d' }
         );
 
-        await redis.set(`refresh:${refresh_token}`, String(user._id), {
-            EX: 7 * 24 * 60 * 60   // 7 days, seconds
+        await redis.set(`refresh:${hashToken(refresh_token)}`, String(user._id), {
+            EX: 7 * 24 * 60 * 60
         });
 
         res.status(200).json({
@@ -84,7 +87,7 @@ exports.refresh = async (req, res, next) => {
             throw new AppError('Not authorized, invalid token', 401, [], 'ERR_INVALID_TOKEN');
         }
 
-        const userId = await redis.get(`refresh:${refresh_token}`);
+        const userId = await redis.get(`refresh:${hashToken(refresh_token)}`);
         if (!userId) {
             throw new AppError('Not authorized, invalid token', 401, [], 'ERR_INVALID_TOKEN');
         }
@@ -95,7 +98,21 @@ exports.refresh = async (req, res, next) => {
             { expiresIn: process.env.JWT_ACCESS_TOKEN_EXPIRES_IN || '15m' }
         );
 
+        const new_refresh_token = jwt.sign(
+            { userId: decoded.userId, type: 'refresh' },
+            process.env.JWT_REFRESH_SECRET,
+            { expiresIn: process.env.JWT_REFRESH_TOKEN_EXPIRES_IN || '7d' }
+        );
+
+        await redis.del(`refresh:${hashToken(refresh_token)}`);
+
+        await redis.set(`refresh:${hashToken(new_refresh_token)}`, String(decoded.userId), {
+            EX: 7 * 24 * 60 * 60
+        });
+
         res.status(200).json({ access_token });
+        res.status(200).json({ access_token, refresh_token: new_refresh_token });
+
     } catch (e) {
         next(e);
     }
@@ -108,7 +125,7 @@ exports.logout = async (req, res, next) => {
             throw new AppError('Refresh token required', 401, [], 'ERR_NO_TOKEN');
         }
 
-        await redis.del(`refresh:${refresh_token}`);
+        await redis.del(`refresh:${hashToken(refresh_token)}`);
 
         res.status(200).json({ message: 'Logged out' });
     } catch (e) {

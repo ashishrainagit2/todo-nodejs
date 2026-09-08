@@ -3345,6 +3345,33 @@ See also: [`readme.md` — API performance & monitoring](readme.md#api-performan
 
 **Suggested order:** §16.7 first (the event loop underpins everything), then 16.5 and 16.6, then 16.1. The rest are independent.
 
+### When this API grows (matrimonial / commercial) — do we need RabbitMQ?
+
+**Status:** ❌ no queue yet. Redis is already running (refresh tokens).
+
+Not on day one. You need a **queue** when the HTTP request should not wait — not specifically RabbitMQ.
+
+A full product (e.g. matrimonial) will eventually have work like: email / SMS (OTP, “someone liked you”), resize profile photos, matching in the background, push notifications. Those should not sit inside `POST /register` for 8 seconds. Drop a **job**, return 201, a worker does the rest.
+
+You already run **Redis**. For Node, **BullMQ** (jobs on Redis) is the usual next step. Same Redis, no new broker.
+
+```
+| Tool         | What it is                         | When                                      |
+|--------------|------------------------------------|-------------------------------------------|
+| **BullMQ**   | Job queue on Redis                 | This stack. Email, SMS, images, matching  |
+| **RabbitMQ** | Dedicated message broker           | Many services / languages sharing one bus |
+| **Kafka**    | Event log, replay, huge streams    | Serious scale. Overkill for a long time   |
+```
+
+Order if this becomes commercial:
+
+1. Redis (done) — sessions, later cache
+2. **BullMQ** when email/SMS/images leave the request
+3. RabbitMQ only if several services need a shared broker
+4. Kafka much later, if ever
+
+**Yes you will need background jobs. No, you do not need to pick RabbitMQ now.** Redis + BullMQ matches this stack.
+
 ---
 
 ### 16.1 Architecting unbreakable Node.js applications
