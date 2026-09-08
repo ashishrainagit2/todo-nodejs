@@ -5,6 +5,7 @@ const AppError = require('../utils/AppError');
 const redis = require('../utils/redis');
 const hashToken = require('../utils/hashToken');
 const { sendMail } = require('../utils/mailer');
+const { sendSms, checkSms } = require('../utils/sms');
 const crypto = require('crypto');
 
 exports.register = async (req, res, next) => {
@@ -13,9 +14,9 @@ exports.register = async (req, res, next) => {
         const phone = req.body?.phone?.trim() || undefined;
         const { password, role } = req.body ?? {};
 
-        if (!email && !phone) {
-            throw new AppError('Email or phone required', 400, [
-                { field: 'email', message: 'provide email or phone' }
+        if (!email || !phone) {
+            throw new AppError('Email and phone required', 400, [
+                { field: 'email', message: 'provide email and phone' }
             ], 'ERR_VALIDATION');
         }
 
@@ -332,6 +333,44 @@ exports.verifyEmail = async (req, res, next) => {
         }
 
         res.status(200).json({ message: 'Email verified' });
+    } catch (e) {
+        next(e);
+    }
+};
+
+exports.sendVerifyPhone = async (req, res, next) => {
+    try {
+        if (!req.user.phone) {
+            throw new AppError('No phone on this account', 400, [], 'ERR_VALIDATION');
+        }
+        if (req.user.phoneVerified) {
+            return res.status(200).json({ message: 'Phone already verified' });
+        }
+
+        await sendSms({ to: req.user.phone });
+        res.status(200).json({ message: 'Verification code sent' });
+    } catch (e) {
+        next(e);
+    }
+};
+
+exports.verifyPhone = async (req, res, next) => {
+    try {
+        const otp = String(req.body?.otp ?? '').trim();
+        if (!otp) {
+            throw new AppError('OTP required', 400, [], 'ERR_VALIDATION');
+        }
+        if (!req.user.phone) {
+            throw new AppError('No phone on this account', 400, [], 'ERR_VALIDATION');
+        }
+
+        const ok = await checkSms({ to: req.user.phone, code: otp });
+        if (!ok) {
+            throw new AppError('Invalid or expired code', 400, [], 'ERR_INVALID_TOKEN');
+        }
+
+        await User.findByIdAndUpdate(req.user._id, { phoneVerified: true });
+        res.status(200).json({ message: 'Phone verified' });
     } catch (e) {
         next(e);
     }

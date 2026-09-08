@@ -106,7 +106,7 @@ const components = {
 
         RegisterRequest: {
             type: 'object',
-            required: ['password'],
+            required: ['email', 'phone', 'password'],
             properties: {
                 email: { type: 'string', format: 'email', example: 'user@example.com' },
                 phone: { type: 'string', example: '9876543210' },
@@ -137,7 +137,16 @@ const components = {
                 email: { type: 'string', example: 'user@example.com' },
                 phone: { type: 'string', example: '9876543210' },
                 role: { type: 'string', example: 'user' },
-                emailVerified: { type: 'boolean', example: false }
+                emailVerified: { type: 'boolean', example: false },
+                phoneVerified: { type: 'boolean', example: false }
+            }
+        },
+
+        VerifyPhoneRequest: {
+            type: 'object',
+            required: ['otp'],
+            properties: {
+                otp: { type: 'string', example: '123456' }
             }
         },
 
