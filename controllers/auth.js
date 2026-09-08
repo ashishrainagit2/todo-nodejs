@@ -11,34 +11,22 @@ const crypto = require('crypto');
 exports.register = async (req, res, next) => {
     try {
         const email = req.body?.email?.trim() || undefined;
-        const phone = req.body?.phone?.trim() || undefined;
         const { password } = req.body ?? {};
 
-        if (!email || !phone) {
-            throw new AppError('Email and phone required', 400, [
-                { field: 'email', message: 'provide email and phone' }
+        if (!email) {
+            throw new AppError('Email required', 400, [
+                { field: 'email', message: 'provide email' }
             ], 'ERR_VALIDATION');
         }
 
-        if (email) {
-            const existingEmail = await User.findOne({ email });
-            if (existingEmail) {
-                throw new AppError('Email already registered', 409, [
-                    { field: 'email', message: 'email is already registered' }
-                ], 'ERR_EMAIL_TAKEN');
-            }
+        const existingEmail = await User.findOne({ email });
+        if (existingEmail) {
+            throw new AppError('Email already registered', 409, [
+                { field: 'email', message: 'email is already registered' }
+            ], 'ERR_EMAIL_TAKEN');
         }
 
-        if (phone) {
-            const existingPhone = await User.findOne({ phone });
-            if (existingPhone) {
-                throw new AppError('Phone already registered', 409, [
-                    { field: 'phone', message: 'phone is already registered' }
-                ], 'ERR_PHONE_TAKEN');
-            }
-        }
-
-        const user = await User.create({ email, phone, password });
+        const user = await User.create({ email, password });
         res.status(201).json({
             message: 'User created successfully. Please login.',
             user: { id: user._id, email: user.email, phone: user.phone, role: user.role }
@@ -51,14 +39,13 @@ exports.register = async (req, res, next) => {
 exports.login = async (req, res, next) => {
     try {
         const email = req.body?.email?.trim() || undefined;
-        const phone = req.body?.phone?.trim() || undefined;
         const { password } = req.body ?? {};
 
-        if (!email && !phone) {
-            throw new AppError('Email or phone required', 400, [], 'ERR_VALIDATION');
+        if (!email) {
+            throw new AppError('Email required', 400, [], 'ERR_VALIDATION');
         }
 
-        const user = await User.findOne(email ? { email } : { phone });
+        const user = await User.findOne({ email });
         if (!user) {
             // same message for unknown email and wrong password — don't reveal which
             throw new AppError('Invalid credentials', 401, [], 'ERR_INVALID_CREDENTIALS');

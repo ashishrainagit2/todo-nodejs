@@ -29,8 +29,8 @@ One line each, in the order we added them.
 25. Leftover access tokens on other devices still work until 15m unless they also get denylisted (we skipped `tokenVersion` for instant all-device access kill).
 26. `POST /auth/change-password`: current + new, bcrypt via pre-save, wipe all refresh sessions, `clearCookie`.
 27. Role is **not** accepted from the API; schema default is `user` (nobody can register as admin).
-28. Register requires **email and phone**; login is **email or phone** + password.
-29. Sparse unique on email and phone so either field can exist without colliding on `null`.
+28. Register and login require **email + password** only. Phone is added later (not on these two endpoints).
+29. Email is required unique; phone is optional sparse unique until we collect it separately.
 30. `emailVerified` / `phoneVerified` flags, default `false` — login does **not** block unverified users.
 31. Email verify send (logged in): random token, store `verify:<hash> → userId` in Redis 24h, email a frontend link.
 32. Email verify confirm (public): POST `{ token }`, hash, Redis lookup, set `emailVerified`, delete key.

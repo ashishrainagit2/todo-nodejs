@@ -4,8 +4,8 @@ const bcrypt = require('bcryptjs');
 const UserSchema = mongoose.Schema({
     email: {
         type: String,
+        required: true,
         unique: true,
-        sparse: true,
         lowercase: true,
         trim: true,
         match: [/^\S+@\S+\.\S+$/, 'email must be a valid email address']
@@ -33,12 +33,6 @@ const UserSchema = mongoose.Schema({
     phoneVerified: {
         type: Boolean,
         default: false
-    }
-});
-
-UserSchema.pre('validate', function () {
-    if (!this.email && !this.phone) {
-        this.invalidate('email', 'email or phone is required');
     }
 });
 
